@@ -45,49 +45,90 @@ pub fn cache_message(
 pub fn message_detail(summary: MessageSummary, cc: String, raw: &[u8]) -> Result<MessageDetail, String> {
     let parsed = parse_mail(raw).map_err(|e| e.to_string())?;
     let (body_text, body_html) = extract_bodies(&parsed);
-    let attachments = attachment_parts(&parsed)
-        .into_iter()
-        .enumerate()
-        .map(|(index, part)| AttachmentInfo {
-            index,
-            name: attachment_name(part, index),
-            content_type: part.ctype.mimetype.clone(),
-            size: part.get_body_raw().map(|bytes| bytes.len()).unwrap_or(0),
-        })
-        .collect();
+    let attachments = attachment_infos(&parsed);
 
     Ok(MessageDetail { summary, cc, body_text, body_html, attachments })
 }
 
 pub fn attachment_bytes(raw: &[u8], index: usize) -> Result<(String, Vec<u8>), String> {
     let parsed = parse_mail(raw).map_err(|e| e.to_string())?;
-    let parts = attachment_parts(&parsed);
-    let part = parts.get(index).ok_or_else(|| "Attachment was not found".to_string())?;
-    let name = attachment_name(part, index);
-    let bytes = part.get_body_raw().map_err(|e| e.to_string())?;
-    Ok((name, bytes))
+    let mut current_index = 0usize;
+    find_attachment(&parsed, index, &mut current_index)?
+        .ok_or_else(|| "Attachment was not found".to_string())
 }
 
 fn extract_bodies(parsed: &ParsedMail<'_>) -> (String, Option<String>) {
     let mut text = None;
     let mut html = None;
-    for part in parsed.parts() {
-        if is_attachment(part) { continue; }
-        match part.ctype.mimetype.as_str() {
-            "text/plain" if text.is_none() => text = part.get_body().ok(),
-            "text/html" if html.is_none() => html = part.get_body().ok(),
-            _ => {}
-        }
-    }
+    collect_bodies(parsed, &mut text, &mut html);
+
     if text.is_none() && parsed.subparts.is_empty() {
         text = parsed.get_body().ok();
     }
+
     let fallback = html.as_deref().map(strip_html).unwrap_or_default();
     (text.unwrap_or(fallback), html)
 }
 
-fn attachment_parts<'parsed, 'raw>(parsed: &'parsed ParsedMail<'raw>) -> Vec<&'parsed ParsedMail<'raw>> {
-    parsed.parts().filter(|part| is_attachment(part)).collect()
+fn collect_bodies(parsed: &ParsedMail<'_>, text: &mut Option<String>, html: &mut Option<String>) {
+    if !is_attachment(parsed) {
+        match parsed.ctype.mimetype.as_str() {
+            "text/plain" if text.is_none() => *text = parsed.get_body().ok(),
+            "text/html" if html.is_none() => *html = parsed.get_body().ok(),
+            _ => {}
+        }
+    }
+
+    for part in &parsed.subparts {
+        collect_bodies(part, text, html);
+    }
+}
+
+fn attachment_infos(parsed: &ParsedMail<'_>) -> Vec<AttachmentInfo> {
+    let mut attachments = Vec::new();
+    collect_attachment_infos(parsed, &mut attachments);
+    attachments
+}
+
+fn collect_attachment_infos(parsed: &ParsedMail<'_>, attachments: &mut Vec<AttachmentInfo>) {
+    if is_attachment(parsed) {
+        let index = attachments.len();
+        attachments.push(AttachmentInfo {
+            index,
+            name: attachment_name(parsed, index),
+            content_type: parsed.ctype.mimetype.clone(),
+            size: parsed.get_body_raw().map(|bytes| bytes.len()).unwrap_or(0),
+        });
+    }
+
+    for part in &parsed.subparts {
+        collect_attachment_infos(part, attachments);
+    }
+}
+
+fn find_attachment(
+    parsed: &ParsedMail<'_>,
+    target_index: usize,
+    current_index: &mut usize,
+) -> Result<Option<(String, Vec<u8>)>, String> {
+    if is_attachment(parsed) {
+        let index = *current_index;
+        *current_index += 1;
+
+        if index == target_index {
+            let name = attachment_name(parsed, index);
+            let bytes = parsed.get_body_raw().map_err(|e| e.to_string())?;
+            return Ok(Some((name, bytes)));
+        }
+    }
+
+    for part in &parsed.subparts {
+        if let Some(found) = find_attachment(part, target_index, current_index)? {
+            return Ok(Some(found));
+        }
+    }
+
+    Ok(None)
 }
 
 fn is_attachment(part: &ParsedMail<'_>) -> bool {

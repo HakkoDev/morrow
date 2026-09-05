@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: dark;
+
+  /* Morrow — muted slate / warm stone palette. Dark mode is the product theme. */
+  --background: #2f3640;
+  --foreground: color-mix(in srgb, #b8c6bd 88%, white);
+
+  --card: color-mix(in srgb, #2f3640 78%, #4f5966);
+  --card-foreground: color-mix(in srgb, #b8c6bd 88%, white);
+
+  --popover: color-mix(in srgb, #2f3640 68%, #4f5966);
+  --popover-foreground: color-mix(in srgb, #b8c6bd 88%, white);
+
+  --primary: #c8b7a6;
+  --primary-foreground: #2f3640;
+
+  --secondary: #4f5966;
+  --secondary-foreground: color-mix(in srgb, #b8c6bd 88%, white);
+
+  --muted: color-mix(in srgb, #2f3640 62%, #4f5966);
+  --muted-foreground: #a79c91;
+
+  --accent: color-mix(in srgb, #4f5966 72%, #7d8f88);
+  --accent-foreground: color-mix(in srgb, #b8c6bd 90%, white);
+
+  --destructive: #9b6663;
+  --border: color-mix(in srgb, #4f5966 78%, #6f7682);
+  --input: #4f5966;
+  --ring: #b8c6bd;
+
+  --morrow-slate-soft: #6f7682;
+  --morrow-stone: #8b8178;
+  --morrow-stone-soft: #a79c91;
+  --morrow-sand: #c8b7a6;
+  --morrow-sage: #7d8f88;
+  --morrow-sage-soft: #b8c6bd;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body {
+  background: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+button, input, textarea, select { font: inherit; }
+::selection { background: color-mix(in srgb, var(--primary) 36%, transparent); }
+
+.mail-shell {
+  background:
+    radial-gradient(circle at 8% -12%, color-mix(in srgb, #c8b7a6 10%, transparent), transparent 31%),
+    radial-gradient(circle at 94% 108%, color-mix(in srgb, #7d8f88 9%, transparent), transparent 34%),
+    linear-gradient(145deg, color-mix(in srgb, #2f3640 94%, #4f5966), #2f3640 48%, color-mix(in srgb, #2f3640 93%, #8b8178));
+}
+
+/* Keep sender-authored email HTML visually faithful. The surrounding Morrow chrome stays dark. */
+.message-html iframe { background: white; color-scheme: light; }
+.drag-region { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+
+input::placeholder,
+textarea::placeholder { color: color-mix(in srgb, #a79c91 72%, transparent); }
+
+select option {
+  background: #2f3640;
+  color: var(--foreground);
+}

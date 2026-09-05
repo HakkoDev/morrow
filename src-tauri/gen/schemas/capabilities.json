@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default desktop permissions for the mail client","local":true,"windows":["main","compose-*"],"permissions":["core:default","dialog:default","core:webview:allow-create-webview-window","core:window:allow-close"]}}

@@ -69,3 +69,7 @@ release tag just to rerun the build.
 ## License and contributions
 
 Morrow is distributed under [GPLv3](LICENSE) (`GPL-3.0-only`). By submitting a contribution, you agree that it may be distributed under the same license. Only submit code and assets you have the right to contribute.
+
+## UI components
+
+Morrow uses source-owned shadcn-style/Radix primitives and semantic theme tokens. Read [docs/shadcn-standardization.md](docs/shadcn-standardization.md) before adding or restyling controls.

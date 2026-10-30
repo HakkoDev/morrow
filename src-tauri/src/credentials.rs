@@ -15,14 +15,22 @@ pub fn set_smtp_password(account_id: &str, password: &str) -> Result<(), String>
 }
 
 pub fn get_imap_password(account_id: &str) -> Result<String, String> {
-    entry(account_id, "imap")?.get_password().map_err(|e| format!("No IMAP credential is stored for this account: {e}"))
+    entry(account_id, "imap")?
+        .get_password()
+        .map_err(|e| format!("No IMAP credential is stored for this account: {e}"))
 }
 
 pub fn get_smtp_password(account_id: &str) -> Result<String, String> {
-    entry(account_id, "smtp")?.get_password().map_err(|e| format!("No SMTP credential is stored for this account: {e}"))
+    entry(account_id, "smtp")?
+        .get_password()
+        .map_err(|e| format!("No SMTP credential is stored for this account: {e}"))
 }
 
 pub fn delete_credentials(account_id: &str) {
-    if let Ok(item) = entry(account_id, "imap") { let _ = item.delete_credential(); }
-    if let Ok(item) = entry(account_id, "smtp") { let _ = item.delete_credential(); }
+    if let Ok(item) = entry(account_id, "imap") {
+        let _ = item.delete_credential();
+    }
+    if let Ok(item) = entry(account_id, "smtp") {
+        let _ = item.delete_credential();
+    }
 }

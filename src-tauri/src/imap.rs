@@ -1,11 +1,21 @@
 use std::{fmt::Debug, pin::Pin, time::Duration};
 
-use async_imap::{types::{Flag, NameAttribute}, Client, Session};
+use async_imap::{
+    types::{Flag, NameAttribute},
+    Client, Session,
+};
 use futures::TryStreamExt;
-use tokio::{io::{AsyncRead, AsyncWrite}, net::TcpStream};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpStream,
+};
 use tokio_native_tls::TlsConnector;
 
-use crate::{db::Database, mime::cache_message, models::{Account, FolderInfo, SecurityMode}};
+use crate::{
+    db::Database,
+    mime::cache_message,
+    models::{Account, FolderInfo, SecurityMode},
+};
 
 pub trait MailStream: AsyncRead + AsyncWrite + Unpin + Send + Debug {}
 impl<T> MailStream for T where T: AsyncRead + AsyncWrite + Unpin + Send + Debug {}
@@ -13,13 +23,10 @@ type DynStream = Pin<Box<dyn MailStream>>;
 
 pub async fn connect(account: &Account, password: &str) -> Result<Session<DynStream>, String> {
     // Without a connection deadline a dead endpoint can block manual account setup forever.
-    let tcp = tokio::time::timeout(
-        Duration::from_secs(15),
-        TcpStream::connect((account.imap_host.as_str(), account.imap_port)),
-    )
-    .await
-    .map_err(|_| "IMAP connection timed out after 15 seconds".to_string())?
-    .map_err(|e| format!("IMAP TCP connection failed: {e}"))?;
+    let tcp = tokio::time::timeout(Duration::from_secs(15), TcpStream::connect((account.imap_host.as_str(), account.imap_port)))
+        .await
+        .map_err(|_| "IMAP connection timed out after 15 seconds".to_string())?
+        .map_err(|e| format!("IMAP TCP connection failed: {e}"))?;
 
     let tls = TlsConnector::from(native_tls::TlsConnector::builder().build().map_err(|e| e.to_string())?);
 
@@ -30,11 +37,20 @@ pub async fn connect(account: &Account, password: &str) -> Result<Session<DynStr
         }
         SecurityMode::StartTls => {
             let mut client = Client::new(tcp);
-            client.read_response().await.map_err(|e| format!("IMAP greeting failed: {e}"))?
+            client
+                .read_response()
+                .await
+                .map_err(|e| format!("IMAP greeting failed: {e}"))?
                 .ok_or_else(|| "IMAP server closed before greeting".to_string())?;
-            client.run_command_and_check_ok("STARTTLS", None).await.map_err(|e| format!("IMAP STARTTLS failed: {e}"))?;
+            client
+                .run_command_and_check_ok("STARTTLS", None)
+                .await
+                .map_err(|e| format!("IMAP STARTTLS failed: {e}"))?;
             let tcp = client.into_inner();
-            let stream = tls.connect(&account.imap_host, tcp).await.map_err(|e| format!("IMAP STARTTLS handshake failed: {e}"))?;
+            let stream = tls
+                .connect(&account.imap_host, tcp)
+                .await
+                .map_err(|e| format!("IMAP STARTTLS handshake failed: {e}"))?;
             (Box::pin(stream), false)
         }
         SecurityMode::Plain => (Box::pin(tcp), true),
@@ -42,11 +58,16 @@ pub async fn connect(account: &Account, password: &str) -> Result<Session<DynStr
 
     let mut client = Client::new(stream);
     if needs_greeting {
-        client.read_response().await.map_err(|e| format!("IMAP greeting failed: {e}"))?
+        client
+            .read_response()
+            .await
+            .map_err(|e| format!("IMAP greeting failed: {e}"))?
             .ok_or_else(|| "IMAP server closed before greeting".to_string())?;
     }
 
-    client.login(&account.imap_username, password).await
+    client
+        .login(&account.imap_username, password)
+        .await
         .map_err(|(e, _)| format!("IMAP authentication failed: {e}"))
 }
 
@@ -63,16 +84,23 @@ pub async fn list_folders(account: &Account, password: &str) -> Result<Vec<Folde
         let stream = session.list(None, Some("*")).await.map_err(|e| e.to_string())?;
         stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?
     };
-    let mut output = folders.into_iter().map(|folder| {
-        let selectable = !folder.attributes().iter().any(|attribute| matches!(attribute, &NameAttribute::NoSelect));
-        FolderInfo {
-            name: folder.name().to_string(),
-            delimiter: folder.delimiter().map(ToString::to_string),
-            attributes: folder.attributes().iter().map(attribute_name).collect(),
-            selectable,
-        }
-    }).collect::<Vec<_>>();
-    output.sort_by(|a, b| folder_rank(a).cmp(&folder_rank(b)).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    let mut output = folders
+        .into_iter()
+        .map(|folder| {
+            let selectable = !folder.attributes().iter().any(|attribute| matches!(attribute, &NameAttribute::NoSelect));
+            FolderInfo {
+                name: folder.name().to_string(),
+                delimiter: folder.delimiter().map(ToString::to_string),
+                attributes: folder.attributes().iter().map(attribute_name).collect(),
+                selectable,
+            }
+        })
+        .collect::<Vec<_>>();
+    output.sort_by(|a, b| {
+        folder_rank(a)
+            .cmp(&folder_rank(b))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     let _ = session.logout().await;
     Ok(output)
 }
@@ -186,20 +214,34 @@ pub async fn move_message(account: &Account, password: &str, folder: &str, uid: 
         // If an advertised MOVE fails, do not blindly copy and risk duplicates.
         session.uid_mv(uid.to_string(), destination).await.map_err(|e| e.to_string())?;
     } else if caps.has_str("UIDPLUS") {
-        session.uid_copy(uid.to_string(), destination).await.map_err(|e| format!("IMAP copy failed: {e}"))?;
+        session
+            .uid_copy(uid.to_string(), destination)
+            .await
+            .map_err(|e| format!("IMAP copy failed: {e}"))?;
         {
-            let stream = session.uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
-                .await.map_err(|e| format!("Message copied, but marking the original deleted failed: {e}. Check destination before retrying."))?;
-            stream.try_collect::<Vec<_>>().await.map_err(|e| format!("Message copied, but deletion failed: {e}. Check destination before retrying."))?;
+            let stream = session
+                .uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
+                .await
+                .map_err(|e| format!("Message copied, but marking the original deleted failed: {e}. Check destination before retrying."))?;
+            stream
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|e| format!("Message copied, but deletion failed: {e}. Check destination before retrying."))?;
         }
         {
-            let stream = session.uid_expunge(uid.to_string()).await
+            let stream = session
+                .uid_expunge(uid.to_string())
+                .await
                 .map_err(|e| format!("Message copied, but UID-scoped expunge failed: {e}. Check destination before retrying."))?;
-            stream.try_collect::<Vec<_>>().await
+            stream
+                .try_collect::<Vec<_>>()
+                .await
                 .map_err(|e| format!("Message copied, but UID-scoped expunge failed: {e}. Check destination before retrying."))?;
         }
     } else {
-        return Err("This IMAP server supports neither MOVE nor UIDPLUS. Morrow will not use unsafe mailbox-wide EXPUNGE; move the message in another client.".into());
+        return Err(
+            "This IMAP server supports neither MOVE nor UIDPLUS. Morrow will not use unsafe mailbox-wide EXPUNGE; move the message in another client.".into(),
+        );
     }
     // The requested mutation already succeeded. A failed LOGOUT must not
     // invite the caller to repeat a potentially non-idempotent action.
@@ -217,7 +259,10 @@ pub async fn permanently_delete(account: &Account, password: &str, folder: &str,
         return Err("Safe permanent deletion requires IMAP UIDPLUS. No messages were deleted.".into());
     }
     {
-        let stream = session.uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)").await.map_err(|e| e.to_string())?;
+        let stream = session
+            .uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
+            .await
+            .map_err(|e| e.to_string())?;
         stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?;
     }
     {
@@ -232,7 +277,10 @@ pub async fn permanently_delete(account: &Account, password: &str, folder: &str,
 
 pub async fn append(account: &Account, password: &str, folder: &str, raw: &[u8], flags: Option<&str>) -> Result<(), String> {
     let mut session = connect(account, password).await?;
-    session.append(folder, flags, None, raw).await.map_err(|e| format!("Could not append message to {folder}: {e}"))?;
+    session
+        .append(folder, flags, None, raw)
+        .await
+        .map_err(|e| format!("Could not append message to {folder}: {e}"))?;
     // The requested mutation already succeeded. A failed LOGOUT must not
     // invite the caller to repeat a potentially non-idempotent action.
     let _ = session.logout().await;
@@ -272,12 +320,21 @@ fn attribute_name(attribute: &NameAttribute<'_>) -> String {
 
 fn folder_rank(folder: &FolderInfo) -> u8 {
     let name = folder.name.to_lowercase();
-    if name == "inbox" { 0 }
-    else if folder.attributes.iter().any(|v| v == "Flagged") { 1 }
-    else if folder.attributes.iter().any(|v| v == "Drafts") { 2 }
-    else if folder.attributes.iter().any(|v| v == "Sent") { 3 }
-    else if folder.attributes.iter().any(|v| v == "Archive") { 4 }
-    else if folder.attributes.iter().any(|v| v == "Junk") { 5 }
-    else if folder.attributes.iter().any(|v| v == "Trash") { 6 }
-    else { 20 }
+    if name == "inbox" {
+        0
+    } else if folder.attributes.iter().any(|v| v == "Flagged") {
+        1
+    } else if folder.attributes.iter().any(|v| v == "Drafts") {
+        2
+    } else if folder.attributes.iter().any(|v| v == "Sent") {
+        3
+    } else if folder.attributes.iter().any(|v| v == "Archive") {
+        4
+    } else if folder.attributes.iter().any(|v| v == "Junk") {
+        5
+    } else if folder.attributes.iter().any(|v| v == "Trash") {
+        6
+    } else {
+        20
+    }
 }

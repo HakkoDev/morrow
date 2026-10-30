@@ -5,13 +5,7 @@ use crate::{
     models::{AttachmentInfo, MessageDetail, MessageSummary},
 };
 
-pub fn cache_message(
-    raw: &[u8],
-    account_id: &str,
-    folder: &str,
-    uid: u32,
-    flags: Vec<String>,
-) -> Result<CachedMessage, String> {
+pub fn cache_message(raw: &[u8], account_id: &str, folder: &str, uid: u32, flags: Vec<String>) -> Result<CachedMessage, String> {
     let parsed = parse_mail(raw).map_err(|e| e.to_string())?;
     let headers = parsed.get_headers();
     let subject = headers.get_first_value("Subject").unwrap_or_default();
@@ -19,10 +13,7 @@ pub fn cache_message(
     let recipients = headers.get_first_value("To").unwrap_or_default();
     let cc = headers.get_first_value("Cc").unwrap_or_default();
     let message_id = headers.get_first_value("Message-ID");
-    let date = headers
-        .get_first_value("Date")
-        .and_then(|value| dateparse(&value).ok())
-        .unwrap_or(0);
+    let date = headers.get_first_value("Date").and_then(|value| dateparse(&value).ok()).unwrap_or(0);
     let (text, _) = extract_bodies(&parsed);
     let preview = preview(&text, 240);
 
@@ -47,14 +38,19 @@ pub fn message_detail(summary: MessageSummary, cc: String, raw: &[u8]) -> Result
     let (body_text, body_html) = extract_bodies(&parsed);
     let attachments = attachment_infos(&parsed);
 
-    Ok(MessageDetail { summary, cc, body_text, body_html, attachments })
+    Ok(MessageDetail {
+        summary,
+        cc,
+        body_text,
+        body_html,
+        attachments,
+    })
 }
 
 pub fn attachment_bytes(raw: &[u8], index: usize) -> Result<(String, Vec<u8>), String> {
     let parsed = parse_mail(raw).map_err(|e| e.to_string())?;
     let mut current_index = 0usize;
-    find_attachment(&parsed, index, &mut current_index)?
-        .ok_or_else(|| "Attachment was not found".to_string())
+    find_attachment(&parsed, index, &mut current_index)?.ok_or_else(|| "Attachment was not found".to_string())
 }
 
 fn extract_bodies(parsed: &ParsedMail<'_>) -> (String, Option<String>) {
@@ -109,11 +105,7 @@ fn collect_attachment_infos(parsed: &ParsedMail<'_>, attachments: &mut Vec<Attac
     }
 }
 
-fn find_attachment(
-    parsed: &ParsedMail<'_>,
-    target_index: usize,
-    current_index: &mut usize,
-) -> Result<Option<(String, Vec<u8>)>, String> {
+fn find_attachment(parsed: &ParsedMail<'_>, target_index: usize, current_index: &mut usize) -> Result<Option<(String, Vec<u8>)>, String> {
     if is_attachment(parsed) {
         let index = *current_index;
         *current_index += 1;
@@ -139,14 +131,14 @@ fn is_attachment(part: &ParsedMail<'_>) -> bool {
     disposition.disposition == DispositionType::Attachment
         || disposition.params.contains_key("filename")
         || part.ctype.params.contains_key("name")
-        || (part.subparts.is_empty()
-            && !part.ctype.mimetype.starts_with("text/")
-            && !part.ctype.mimetype.starts_with("multipart/"))
+        || (part.subparts.is_empty() && !part.ctype.mimetype.starts_with("text/") && !part.ctype.mimetype.starts_with("multipart/"))
 }
 
 fn attachment_name(part: &ParsedMail<'_>, index: usize) -> String {
     let disposition = part.get_content_disposition();
-    disposition.params.get("filename")
+    disposition
+        .params
+        .get("filename")
         .or_else(|| part.ctype.params.get("name"))
         .cloned()
         .unwrap_or_else(|| format!("attachment-{}", index + 1))
@@ -163,7 +155,10 @@ fn strip_html(value: &str) -> String {
     for ch in value.chars() {
         match ch {
             '<' => inside = true,
-            '>' => { inside = false; out.push(' '); },
+            '>' => {
+                inside = false;
+                out.push(' ');
+            }
             _ if !inside => out.push(ch),
             _ => {}
         }
@@ -178,15 +173,24 @@ mod tests {
 
     fn summary() -> MessageSummary {
         MessageSummary {
-            id: 1, account_id: "test".into(), folder: "INBOX".into(), uid: 12,
-            message_id: None, subject: String::new(), sender: String::new(),
-            recipients: String::new(), date: 0, preview: String::new(), flags: vec![],
+            id: 1,
+            account_id: "test".into(),
+            folder: "INBOX".into(),
+            uid: 12,
+            message_id: None,
+            subject: String::new(),
+            sender: String::new(),
+            recipients: String::new(),
+            date: 0,
+            preview: String::new(),
+            flags: vec![],
         }
     }
 
     #[test]
     fn plain_text_message_and_headers() {
-        let raw = b"From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Check in\r\nMessage-ID: <abc@example.com>\r\n\r\nHello from Morrow!";
+        let raw =
+            b"From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Check in\r\nMessage-ID: <abc@example.com>\r\n\r\nHello from Morrow!";
         let cached = cache_message(raw, "test", "INBOX", 12, vec!["Seen".into()]).unwrap();
         assert_eq!(cached.subject, "Check in");
         assert_eq!(cached.message_id.as_deref(), Some("<abc@example.com>"));
@@ -209,7 +213,8 @@ mod tests {
             "Content-Disposition: attachment; filename=sample.txt\r\n",
             "Content-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n",
             "--outer--\r\n"
-        ).as_bytes();
+        )
+        .as_bytes();
         let detailed = message_detail(summary(), String::new(), raw).unwrap();
         assert_eq!(detailed.body_text.trim(), "Text content");
         assert!(detailed.body_html.as_deref().unwrap().contains("HTML content"));

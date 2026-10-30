@@ -1,7 +1,7 @@
 use std::{path::Path, time::Duration};
 
 use lettre::{
-    message::{Attachment, Mailbox, Message, MultiPart, SinglePart, header::ContentType},
+    message::{header::ContentType, Attachment, Mailbox, Message, MultiPart, SinglePart},
     transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
 };
@@ -35,18 +35,18 @@ fn transport(account: &Account, password: &str) -> Result<AsyncSmtpTransport<Tok
         SecurityMode::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&account.smtp_host)
             .map_err(|e| e.to_string())?
             .port(account.smtp_port),
-        SecurityMode::Plain => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&account.smtp_host)
-            .port(account.smtp_port),
+        SecurityMode::Plain => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&account.smtp_host).port(account.smtp_port),
     };
-    Ok(builder
-        .credentials(credentials)
-        .timeout(Some(Duration::from_secs(30)))
-        .build())
+    Ok(builder.credentials(credentials).timeout(Some(Duration::from_secs(30))).build())
 }
 
 async fn build_message(account: &Account, input: &SendMessageInput) -> Result<Message, String> {
     let from = Mailbox::new(
-        if account.display_name.trim().is_empty() { None } else { Some(account.display_name.clone()) },
+        if account.display_name.trim().is_empty() {
+            None
+        } else {
+            Some(account.display_name.clone())
+        },
         account.email.parse().map_err(|e| format!("Invalid From address: {e}"))?,
     );
 
@@ -59,9 +59,15 @@ async fn build_message(account: &Account, input: &SendMessageInput) -> Result<Me
     if to.is_empty() {
         return Err("At least one recipient is required".into());
     }
-    for mailbox in to { builder = builder.to(mailbox); }
-    for mailbox in parse_mailboxes(&input.cc)? { builder = builder.cc(mailbox); }
-    for mailbox in parse_mailboxes(&input.bcc)? { builder = builder.bcc(mailbox); }
+    for mailbox in to {
+        builder = builder.to(mailbox);
+    }
+    for mailbox in parse_mailboxes(&input.cc)? {
+        builder = builder.cc(mailbox);
+    }
+    for mailbox in parse_mailboxes(&input.bcc)? {
+        builder = builder.bcc(mailbox);
+    }
 
     if input.attachments.is_empty() {
         return builder.singlepart(SinglePart::plain(input.body.clone())).map_err(|e| e.to_string());
@@ -70,7 +76,9 @@ async fn build_message(account: &Account, input: &SendMessageInput) -> Result<Me
     let mut multipart = MultiPart::mixed().singlepart(SinglePart::plain(input.body.clone()));
     for attachment_path in &input.attachments {
         let path = Path::new(attachment_path);
-        let data = tokio::fs::read(path).await.map_err(|e| format!("Could not read attachment {}: {e}", path.display()))?;
+        let data = tokio::fs::read(path)
+            .await
+            .map_err(|e| format!("Could not read attachment {}: {e}", path.display()))?;
         let filename = path.file_name().and_then(|name| name.to_str()).unwrap_or("attachment").to_string();
         let mime = mime_guess::from_path(path).first_or_octet_stream().essence_str().to_string();
         let content_type = ContentType::parse(&mime).map_err(|e| e.to_string())?;
@@ -80,14 +88,18 @@ async fn build_message(account: &Account, input: &SendMessageInput) -> Result<Me
 }
 
 fn parse_mailboxes(value: &str) -> Result<Vec<Mailbox>, String> {
-    if value.trim().is_empty() { return Ok(Vec::new()); }
+    if value.trim().is_empty() {
+        return Ok(Vec::new());
+    }
     let parsed = addrparse(value).map_err(|e| format!("Invalid recipient list: {e}"))?;
     let mut out = Vec::new();
     for address in parsed.iter() {
         match address {
             MailAddr::Single(info) => out.push(convert_mailbox(info)?),
             MailAddr::Group(group) => {
-                for info in &group.addrs { out.push(convert_mailbox(info)?); }
+                for info in &group.addrs {
+                    out.push(convert_mailbox(info)?);
+                }
             }
         }
     }

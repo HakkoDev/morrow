@@ -8,8 +8,8 @@ mod smtp;
 
 use commands::AppState;
 use db::Database;
-use std::time::Duration;
 use futures::future::join_all;
+use std::time::Duration;
 use tauri::{Emitter, Manager};
 use tokio::time::MissedTickBehavior;
 
@@ -48,10 +48,8 @@ pub fn run() {
                         // Fetch INBOX first, then at most 19 other folders.
                         // This is bounded and never blocks navigation in React.
                         for folder in folders.iter().filter(|folder| folder.selectable).take(20) {
-                            let result = tokio::time::timeout(
-                                Duration::from_secs(55),
-                                imap::sync_folder(&account_db, &account, &password, &folder.name, 100),
-                            ).await;
+                            let result =
+                                tokio::time::timeout(Duration::from_secs(55), imap::sync_folder(&account_db, &account, &password, &folder.name, 100)).await;
                             if matches!(result, Ok(Ok(_))) {
                                 let _ = account_app.emit("mail:synced", serde_json::json!({"accountId": account.id, "folder": folder.name}));
                             }
@@ -138,7 +136,10 @@ fn updater_configuration(app: tauri::AppHandle) -> serde_json::Value {
     let config = app.config().plugins.0.get("updater");
     let configured = config.is_some_and(|updater| {
         updater.get("pubkey").and_then(|value| value.as_str()).is_some_and(|key| !key.trim().is_empty())
-            && updater.get("endpoints").and_then(|value| value.as_array()).is_some_and(|endpoints| !endpoints.is_empty())
+            && updater
+                .get("endpoints")
+                .and_then(|value| value.as_array())
+                .is_some_and(|endpoints| !endpoints.is_empty())
     });
     serde_json::json!({ "configured": configured })
 }

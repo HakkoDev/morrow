@@ -1,74 +1,74 @@
 export type SecurityMode = "tls" | "startTls" | "plain";
 
 export interface Account {
-  id: string;
-  displayName: string;
-  email: string;
-  imapHost: string;
-  imapPort: number;
-  imapSecurity: SecurityMode;
-  imapUsername: string;
-  smtpHost: string;
-  smtpPort: number;
-  smtpSecurity: SecurityMode;
-  smtpUsername: string;
-  sentFolder: string;
-  draftsFolder: string;
-  trashFolder: string;
-  saveSentCopy: boolean;
+    id: string;
+    displayName: string;
+    email: string;
+    imapHost: string;
+    imapPort: number;
+    imapSecurity: SecurityMode;
+    imapUsername: string;
+    smtpHost: string;
+    smtpPort: number;
+    smtpSecurity: SecurityMode;
+    smtpUsername: string;
+    sentFolder: string;
+    draftsFolder: string;
+    trashFolder: string;
+    saveSentCopy: boolean;
 }
 
 export interface AccountInput extends Account {
-  imapPassword?: string;
-  smtpPassword?: string;
+    imapPassword?: string;
+    smtpPassword?: string;
 }
 
 export interface Folder {
-  name: string;
-  delimiter?: string | null;
-  attributes: string[];
-  selectable: boolean;
+    name: string;
+    delimiter?: string | null;
+    attributes: string[];
+    selectable: boolean;
 }
 
 export interface MessageSummary {
-  id: number;
-  accountId: string;
-  folder: string;
-  uid: number;
-  messageId?: string | null;
-  subject: string;
-  sender: string;
-  recipients: string;
-  date: number;
-  preview: string;
-  flags: string[];
+    id: number;
+    accountId: string;
+    folder: string;
+    uid: number;
+    messageId?: string | null;
+    subject: string;
+    sender: string;
+    recipients: string;
+    date: number;
+    preview: string;
+    flags: string[];
 }
 
 export interface AttachmentInfo {
-  index: number;
-  name: string;
-  contentType: string;
-  size: number;
+    index: number;
+    name: string;
+    contentType: string;
+    size: number;
 }
 
 export interface MessageDetail extends MessageSummary {
-  cc: string;
-  bodyText: string;
-  bodyHtml?: string | null;
-  attachments: AttachmentInfo[];
+    cc: string;
+    bodyText: string;
+    bodyHtml?: string | null;
+    attachments: AttachmentInfo[];
 }
 
 export interface SendMessageInput {
-  accountId: string;
-  to: string;
-  cc?: string;
-  bcc?: string;
-  subject: string;
-  body: string;
-  attachments: string[];
+    accountId: string;
+    to: string;
+    cc?: string;
+    bcc?: string;
+    subject: string;
+    body: string;
+    attachments: string[];
 }
 
 export interface ConnectionTestResult {
-  imap: boolean;
-  smtp: boolean;
+    imap: boolean;
+    smtp: boolean;
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.6 — Dependency refresh
+
+- Updated dompurify to 3.4.17, @radix-ui/react-separator to 1.2.0, tailwind-merge to 3.7.0 and @tauri-apps/plugin-dialog to 2.8.3.
+- Upgraded TypeScript to 7.0.2 and migrated the compiler configuration (removed `baseUrl`, added Vite client types).
+- No intentional user-facing changes.
+
 ## v0.1.5 — Themes and preferences (source candidate)
 
 - Added 42 TweakCN themes with matching light/dark palette, typography, radius and shadows. SCFD, tints and accent overlays are excluded.

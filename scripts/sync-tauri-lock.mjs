@@ -28,7 +28,9 @@ export function requiredTauriVersions(contents) {
         if (!match) throw new Error(`Pin ${name} to an exact version (e.g. version = "=2.12.3") in src-tauri/Cargo.toml`);
         return match[1];
     }
-    return { tauri: read("tauri"), "tauri-build": read("tauri-build") };
+    const dialog = /^tauri-plugin-dialog\s*=\s*"=([0-9]+\.[0-9]+\.[0-9]+)"/m.exec(contents)?.[1];
+    if (!dialog) throw new Error("Pin tauri-plugin-dialog to an exact version in src-tauri/Cargo.toml");
+    return { tauri: read("tauri"), "tauri-build": read("tauri-build"), "tauri-plugin-dialog": dialog };
 }
 
 export function mismatches(lockedContents, required) {

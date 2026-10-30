@@ -12,8 +12,17 @@ const cargoLock = `version = 4\n\n[[package]]\nname = "tauri"\nversion = "2.11.5
 test("Tauri manifest pins match the JavaScript core API without changing the app version", () => {
     const versions = requiredTauriVersions(manifest);
     assert.equal(versions.tauri, pkg.dependencies["@tauri-apps/api"]);
+    assert.equal(versions["tauri-plugin-dialog"], pkg.dependencies["@tauri-apps/plugin-dialog"].replace(/^[~^]/, ""));
     assert.equal(pkg.version, config.version);
     assert.equal(pkg.version, cargoVersion);
+});
+
+test("dialog lockfile stays aligned with its manifest pin", () => {
+    const lock = readFileSync(new URL("../src-tauri/Cargo.lock", import.meta.url), "utf8");
+    const required = requiredTauriVersions(manifest);
+    assert.deepEqual(mismatches(lock, required), []);
+    const stale = lock.replace(/(name = "tauri-plugin-dialog"\s+version = ")[^"]+/, (_, prefix) => `${prefix}2.7.3`);
+    assert.deepEqual(mismatches(stale, required), [{ name: "tauri-plugin-dialog", expected: required["tauri-plugin-dialog"], actual: "2.7.3" }]);
 });
 
 test("detect stale Cargo.lock instead of trusting the manifest alone", () => {

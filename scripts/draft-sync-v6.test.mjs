@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 const source = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -62,10 +62,26 @@ test("composer autosave, background sync and conflict UI are wired to native com
 });
 
 test("SQLite v6 draft state behaves correctly under cascade and account isolation", () => {
-    const db = source("src-tauri/src/db.rs");
-    const table = db.match(/CREATE TABLE IF NOT EXISTS draft_sync_state \([\s\S]*?\n {12}\);/);
+    const schema = source("src-tauri/src/db.rs");
+    const table = schema.match(/CREATE TABLE IF NOT EXISTS draft_sync_state \([\s\S]*?\n {12}\);/);
     assert.ok(table);
-    const script = `import sqlite3\nc=sqlite3.connect(':memory:')\nc.execute('PRAGMA foreign_keys=ON')\nc.execute('CREATE TABLE accounts(id TEXT PRIMARY KEY)')\nc.execute('INSERT INTO accounts VALUES (?)',('a',))\nc.execute('INSERT INTO accounts VALUES (?)',('b',))\nc.executescript(${JSON.stringify(table[0])})\nc.execute("INSERT INTO draft_sync_state(account_id,draft_id,local_revision,remote_revision,remote_hash,status) VALUES('a','draft-1','base','remote','hash','synced')")\nc.execute("INSERT INTO draft_sync_state(account_id,draft_id,local_revision,remote_revision,remote_hash,status) VALUES('b','draft-1','other','other','hash2','conflict')")\nassert c.execute("SELECT local_revision FROM draft_sync_state WHERE account_id='a'").fetchone()[0]=='base'\nc.execute("DELETE FROM accounts WHERE id='a'")\nassert c.execute("SELECT COUNT(*) FROM draft_sync_state WHERE account_id='a'").fetchone()[0]==0\nassert c.execute("SELECT status FROM draft_sync_state WHERE account_id='b'").fetchone()[0]=='conflict'\n`;
-    const result = spawnSync("python3", ["-c", script], { encoding: "utf8" });
-    assert.equal(result.status, 0, result.stderr);
+    // Use the CI-pinned Node runtime's SQLite, not the runner's older Python SQLite.
+    const db = new DatabaseSync(":memory:");
+    try {
+        db.exec("PRAGMA foreign_keys=ON; CREATE TABLE accounts(id TEXT PRIMARY KEY); INSERT INTO accounts VALUES('a'),('b');");
+        db.exec(table[0]);
+        const insert = db.prepare("INSERT INTO draft_sync_state(account_id,draft_id,local_revision,remote_revision,remote_hash,status) VALUES(?,?,?,?,?,?)");
+        insert.run("a", "draft-1", "base", "remote", "hash", "synced");
+        insert.run("b", "draft-1", "other", "other", "hash2", "conflict");
+        const local = db.prepare("SELECT local_revision, updated_at FROM draft_sync_state WHERE account_id='a'").get();
+        assert.equal(local.local_revision, "base");
+        assert.ok(Number.isInteger(local.updated_at) && local.updated_at > 0, "Schema timestamp default must execute successfully");
+        assert.throws(() => insert.run("a", "draft-1", "duplicate", "remote", "hash", "synced"), /UNIQUE constraint failed/);
+        assert.throws(() => insert.run("missing", "draft-1", "base", "remote", "hash", "synced"), /FOREIGN KEY constraint failed/);
+        db.exec("DELETE FROM accounts WHERE id='a'");
+        assert.equal(db.prepare("SELECT COUNT(*) AS count FROM draft_sync_state WHERE account_id='a'").get().count, 0);
+        assert.equal(db.prepare("SELECT status FROM draft_sync_state WHERE account_id='b'").get().status, "conflict");
+    } finally {
+        db.close();
+    }
 });

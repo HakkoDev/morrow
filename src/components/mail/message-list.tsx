@@ -1,6 +1,7 @@
 import { Archive, Download, FolderInput, LoaderCircle, MailCheck, MailWarning, RefreshCw, Search, Star, Trash2 } from "lucide-react";
 import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { folderLabel } from "@/lib/folder-labels";
 import { usePreferences } from "@/lib/preferences";
@@ -53,23 +54,7 @@ export function MessageList(props: Props) {
     const scrollRef = useRef<HTMLElement>(null);
     const previousMailbox = useRef({ accountId, folder });
     const [isNearBottom, setIsNearBottom] = useState(false);
-    const [menu, setMenu] = useState<{ x: number; y: number; ids: number[] } | null>(null);
-    useEffect(() => {
-        if (!menu) return;
-        const dismiss = () => setMenu(null);
-        const onEscapeKey = (event: globalThis.KeyboardEvent) => {
-            if (event.key === "Escape") dismiss();
-        };
-        document.addEventListener("pointerdown", dismiss);
-        document.addEventListener("keydown", onEscapeKey);
-        window.addEventListener("blur", dismiss);
-        return () => {
-            document.removeEventListener("pointerdown", dismiss);
-            document.removeEventListener("keydown", onEscapeKey);
-            window.removeEventListener("blur", dismiss);
-        };
-    }, [menu]);
-
+    const [menuIds, setMenuIds] = useState<number[]>([]);
     const checkScroll = useCallback(() => {
         const element = scrollRef.current;
         if (!element) return;
@@ -83,8 +68,6 @@ export function MessageList(props: Props) {
             onLoadOlder();
         }
     }, [isNearBottom, canLoadOlder, loading, query, messages.length, onLoadOlder]);
-    // Re-evaluate when cached rows arrive or additional history is appended.
-    // Read the count inside the effect so the dependency reflects the work.
     useEffect(() => {
         if (messages.length === 0) {
             setIsNearBottom(false);
@@ -129,22 +112,17 @@ export function MessageList(props: Props) {
             onSelectionChange([]);
             return;
         }
+        // Radix opens the menu via keyboard; ensure it uses the focused message.
         if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
-            event.preventDefault();
-            const rect = event.currentTarget.getBoundingClientRect();
-            const ids = selection.includes(message.id) ? selection : [message.id];
-            if (!selection.includes(message.id)) onSelectionChange(ids);
-            setMenu({ x: rect.left + 20, y: rect.top + 20, ids });
+            openMenu(message);
         }
     }
-    function openMenu(event: MouseEvent<HTMLElement>, message: MessageSummary) {
-        event.preventDefault();
+    function openMenu(message: MessageSummary) {
         const ids = selection.includes(message.id) ? selection : [message.id];
         if (!selection.includes(message.id)) onSelectionChange(ids);
-        setMenu({ x: Math.min(event.clientX, window.innerWidth - 236), y: Math.min(event.clientY, window.innerHeight - 340), ids });
+        setMenuIds(ids);
     }
     function run(action: MessageAction, ids = selection) {
-        setMenu(null);
         if (ids.length) onAction(action, ids);
     }
 
@@ -184,30 +162,34 @@ export function MessageList(props: Props) {
             </div>
             {selection.length > 1 && (
                 <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/20 px-3 py-2 text-xs">
-                    <button
-                        type="button"
-                        className="cursor-pointer text-primary underline"
+                    <Button
+                        variant="link"
+                        size="xs"
+                        className="text-primary"
                         onClick={() => onSelectionChange(allSelected ? [] : allIds)}
                     >
                         {allSelected ? "Clear selection" : "Select all"}
-                    </button>
+                    </Button>
                     <span className="flex-1" />{" "}
-                    <button
-                        type="button"
+                    <Button
+                        variant="ghost"
+                        size="icon-xs"
                         onClick={() => run("read")}
-                        className="cursor-pointer"
+                        aria-label="Mark as read"
                         title="Mark as read"
                     >
                         <MailCheck className="size-4" />
-                    </button>
-                    <button
-                        type="button"
+                    </Button>
+                    <Button
+                        variant="ghost"
+                        size="icon-xs"
                         onClick={() => run("delete")}
-                        className="cursor-pointer text-destructive"
+                        className="text-destructive"
+                        aria-label="Delete selected"
                         title="Delete selected"
                     >
                         <Trash2 className="size-4" />
-                    </button>
+                    </Button>
                 </div>
             )}
             <section
@@ -221,53 +203,104 @@ export function MessageList(props: Props) {
                         {loading ? "Loading cached mail…" : "No cached messages in this folder yet. Background sync will populate it when available."}
                     </div>
                 ) : (
-                    <div className="divide-y divide-border/70">
-                        {messages.map((message, index) => {
-                            const unread = !message.flags.some((flag) => flag.replace(/^\\/, "") === "Seen");
-                            const starred = message.flags.some((flag) => flag.replace(/^\\/, "") === "Flagged");
-                            const selected = selection.includes(message.id);
-                            return (
-                                <button
-                                    key={message.id}
-                                    type="button"
-                                    aria-pressed={selected}
-                                    onClick={(event) => handleClick(event, message, index)}
-                                    onContextMenu={(event) => openMenu(event, message)}
-                                    onKeyDown={(event) => handleRowKeyDown(event, message)}
-                                    className={cn(
-                                        "grid w-full cursor-pointer grid-cols-[38px_1fr] gap-2 px-3 py-3 text-left transition hover:bg-accent/60 focus-visible:outline-2 focus-visible:outline-ring",
-                                        preferences.density === "compact" && "py-1.5",
-                                        (selected || selectedId === message.id) && "bg-accent/80",
-                                        unread && !selected && "bg-primary/[0.045]",
-                                    )}
-                                >
-                                    <div className="flex size-8 items-center justify-center rounded-full bg-secondary text-[10px] font-semibold">
-                                        {initials(message.sender)}
-                                    </div>
-                                    <div className="min-w-0">
-                                        <div className="flex items-center gap-2">
-                                            <span className={cn("min-w-0 flex-1 truncate text-xs", unread ? "font-semibold text-foreground" : "font-medium")}>
-                                                {message.sender || "Unknown sender"}
-                                            </span>
-                                            {starred && <Star className="size-3 fill-current text-primary" />}
-                                            <span className="shrink-0 text-[10px] text-muted-foreground">{formatDate(message.date)}</span>
-                                        </div>
-                                        <div className={cn("mt-0.5 truncate text-xs", unread ? "font-semibold" : "text-foreground/85")}>
-                                            {message.subject || "(no subject)"}
-                                        </div>
-                                        {unified && (
-                                            <div className="mt-0.5 truncate text-[10px] text-primary">
-                                                {accountEmails[message.accountId] || message.accountId} · {folderLabel(message.folder)}
+                    <ContextMenu>
+                        <ContextMenuTrigger asChild>
+                            <div className="divide-y divide-border/70">
+                                {messages.map((message, index) => {
+                                    const unread = !message.flags.some((flag) => flag.replace(/^\\/, "") === "Seen");
+                                    const starred = message.flags.some((flag) => flag.replace(/^\\/, "") === "Flagged");
+                                    const selected = selection.includes(message.id);
+                                    return (
+                                        <Button
+                                            variant="ghost"
+                                            key={message.id}
+                                            type="button"
+                                            aria-pressed={selected}
+                                            onClick={(event) => handleClick(event, message, index)}
+                                            onContextMenu={() => openMenu(message)}
+                                            onKeyDown={(event) => handleRowKeyDown(event, message)}
+                                            className={cn(
+                                                "grid h-auto w-full cursor-pointer grid-cols-[38px_1fr] items-start justify-start gap-2 whitespace-normal rounded-none px-3 py-3 text-left font-normal transition hover:bg-accent/60 focus-visible:outline-2 focus-visible:outline-ring",
+                                                preferences.density === "compact" && "py-1.5",
+                                                (selected || selectedId === message.id) && "bg-accent/80",
+                                                unread && !selected && "bg-primary/[0.045]",
+                                            )}
+                                        >
+                                            <div className="flex size-8 items-center justify-center rounded-full bg-secondary text-[10px] font-semibold">
+                                                {initials(message.sender)}
                                             </div>
-                                        )}
-                                        {preferences.showPreviews && (
-                                            <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">{message.preview}</div>
-                                        )}
-                                    </div>
-                                </button>
-                            );
-                        })}
-                    </div>
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-2">
+                                                    <span
+                                                        className={cn(
+                                                            "min-w-0 flex-1 truncate text-xs",
+                                                            unread ? "font-semibold text-foreground" : "font-medium",
+                                                        )}
+                                                    >
+                                                        {message.sender || "Unknown sender"}
+                                                    </span>
+                                                    {starred && <Star className="size-3 fill-current text-primary" />}
+                                                    <span className="shrink-0 text-[10px] text-muted-foreground">{formatDate(message.date)}</span>
+                                                </div>
+                                                <div className={cn("mt-0.5 truncate text-xs", unread ? "font-semibold" : "text-foreground/85")}>
+                                                    {message.subject || "(no subject)"}
+                                                </div>
+                                                {unified && (
+                                                    <div className="mt-0.5 truncate text-[10px] text-primary">
+                                                        {accountEmails[message.accountId] || message.accountId} · {folderLabel(message.folder)}
+                                                    </div>
+                                                )}
+                                                {preferences.showPreviews && (
+                                                    <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">{message.preview}</div>
+                                                )}
+                                            </div>
+                                        </Button>
+                                    );
+                                })}
+                            </div>
+                        </ContextMenuTrigger>
+                        <ContextMenuContent
+                            aria-label="Message actions"
+                            className="w-56"
+                        >
+                            {(
+                                [
+                                    ["read", "Mark as read", MailCheck],
+                                    ["unread", "Mark as unread", MailWarning],
+                                    ["star", "Star", Star],
+                                    ["unstar", "Remove star", Star],
+                                    ["archive", "Archive", Archive],
+                                    ["spam", "Mark as spam", MailWarning],
+                                    ["delete", "Delete", Trash2],
+                                    ["save", "Save as .eml", Download],
+                                ] as const
+                            ).map(([action, name, Icon]) => (
+                                <ContextMenuItem
+                                    key={action}
+                                    disabled={action === "save" && menuIds.length !== 1}
+                                    onSelect={() => run(action, menuIds)}
+                                >
+                                    <Icon className="size-4" /> {name}
+                                </ContextMenuItem>
+                            ))}
+                            {folders.some((name) => name !== folder) && (
+                                <>
+                                    <ContextMenuSeparator />
+                                    <ContextMenuLabel>Move to folder</ContextMenuLabel>
+                                    {folders
+                                        .filter((name) => name !== folder)
+                                        .map((name) => (
+                                            <ContextMenuItem
+                                                key={name}
+                                                onSelect={() => run(`move:${name}`, menuIds)}
+                                            >
+                                                <FolderInput className="size-4" /> <span className="truncate">{folderLabel(name)}</span>
+                                            </ContextMenuItem>
+                                        ))}
+                                </>
+                            )}
+                        </ContextMenuContent>
+                    </ContextMenu>
                 )}
                 {canLoadOlder && loading && messages.length > 0 && (
                     <div
@@ -278,59 +311,6 @@ export function MessageList(props: Props) {
                     </div>
                 )}
             </section>
-            {menu && (
-                <div
-                    role="menu"
-                    aria-label="Message actions"
-                    className="morrow-popover fixed z-[100] w-56 max-h-[70vh] overflow-y-auto rounded-lg border border-border bg-popover p-1 text-xs text-popover-foreground shadow-2xl"
-                    style={{ left: Math.max(4, menu.x), top: Math.max(4, menu.y) }}
-                    onPointerDown={(event) => event.stopPropagation()}
-                >
-                    {(
-                        [
-                            ["read", "Mark as read", MailCheck],
-                            ["unread", "Mark as unread", MailWarning],
-                            ["star", "Star", Star],
-                            ["unstar", "Remove star", Star],
-                            ["archive", "Archive", Archive],
-                            ["spam", "Mark as spam", MailWarning],
-                            ["delete", "Delete", Trash2],
-                            ["save", "Save as .eml", Download],
-                        ] as const
-                    ).map(([action, name, Icon]) => (
-                        <button
-                            key={action}
-                            type="button"
-                            role="menuitem"
-                            disabled={action === "save" && menu.ids.length !== 1}
-                            onClick={() => run(action, menu.ids)}
-                            className="flex w-full cursor-pointer items-center gap-2 rounded px-3 py-2 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                            <Icon className="size-4" /> {name}
-                        </button>
-                    ))}
-                    {folders.filter((name) => name !== folder).length > 0 && (
-                        <>
-                            <div className="my-1 border-t border-border" />
-                            <div className="px-3 py-1.5 text-[10px] text-muted-foreground">Move to folder</div>
-                            {folders
-                                .filter((name) => name !== folder)
-                                .map((name) => (
-                                    <button
-                                        key={name}
-                                        type="button"
-                                        role="menuitem"
-                                        onClick={() => run(`move:${name}`, menu.ids)}
-                                        className="flex w-full cursor-pointer items-center gap-2 rounded px-3 py-2 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-                                    >
-                                        <FolderInput className="size-4" />
-                                        <span className="truncate">{folderLabel(name)}</span>
-                                    </button>
-                                ))}
-                        </>
-                    )}
-                </div>
-            )}
         </section>
     );
 }

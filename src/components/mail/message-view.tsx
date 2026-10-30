@@ -242,7 +242,9 @@ function MessageViewContent({ account, message, folders, onCompose, onChanged, o
                             aria-label="Conversation messages"
                         >
                             {conversation.map((item, index) => (
-                                <button
+                                <Button
+                                    variant="outline"
+                                    size="xs"
                                     key={item.id}
                                     type="button"
                                     onClick={() => onThreadSelect?.(item)}
@@ -250,7 +252,7 @@ function MessageViewContent({ account, message, folders, onCompose, onChanged, o
                                     className={`cursor-pointer rounded-md border px-2 py-1 text-[11px] transition hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring ${item.id === currentMessage.id ? "border-primary bg-primary/10" : "border-border"}`}
                                 >
                                     {index + 1}. {item.sender.split("<")[0].trim() || "Message"}
-                                </button>
+                                </Button>
                             ))}
                         </fieldset>
                     )}
@@ -269,13 +271,14 @@ function MessageViewContent({ account, message, folders, onCompose, onChanged, o
                     </div>
 
                     {currentMessage.bodyHtml && !remoteImagesEnabled && (
-                        <button
+                        <Button
+                            variant="outline"
                             type="button"
                             onClick={() => setAllowRemoteImages(true)}
                             className="mt-5 flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
                         >
                             <ImageOff className="size-4" /> Remote images are blocked for privacy. Click to load them.
-                        </button>
+                        </Button>
                     )}
 
                     <div
@@ -302,11 +305,12 @@ function MessageViewContent({ account, message, folders, onCompose, onChanged, o
                             <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Attachments</h2>
                             <div className="mt-2 grid gap-2 sm:grid-cols-2">
                                 {currentMessage.attachments.map((attachment) => (
-                                    <button
+                                    <Button
+                                        variant="outline"
                                         type="button"
                                         key={attachment.index}
                                         onClick={() => downloadAttachment(attachment.index, attachment.name)}
-                                        className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-card p-3 text-left transition hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+                                        className="flex h-auto cursor-pointer items-center justify-start gap-3 whitespace-normal rounded-lg border border-border bg-card p-3 text-left transition hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
                                     >
                                         <div className="flex size-9 items-center justify-center rounded-md bg-secondary">
                                             <Download className="size-4" />
@@ -318,7 +322,7 @@ function MessageViewContent({ account, message, folders, onCompose, onChanged, o
                                             </div>
                                         </div>
                                         <ExternalLink className="size-3.5 text-muted-foreground" />
-                                    </button>
+                                    </Button>
                                 ))}
                             </div>
                         </div>

@@ -1,6 +1,8 @@
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { updatePreferences, usePreferences } from "@/lib/preferences";
 import type { Account } from "@/lib/types";
 
@@ -38,24 +40,23 @@ export function ManageAccountsDialog({ open, onOpenChange, accounts, onAdd, onEd
                                     {item.email} · {item.imapHost}
                                 </div>
                             </div>
-                            <label
+                            <Label
                                 className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
                                 title="Disable desktop alerts for this account"
                             >
-                                <input
-                                    type="checkbox"
+                                <Checkbox
                                     checked={preferences.mutedAccounts.includes(item.id)}
-                                    onChange={(event) =>
+                                    onCheckedChange={(checked) =>
                                         updatePreferences({
-                                            mutedAccounts: event.target.checked
-                                                ? [...new Set([...preferences.mutedAccounts, item.id])]
-                                                : preferences.mutedAccounts.filter((id) => id !== item.id),
+                                            mutedAccounts:
+                                                checked === true
+                                                    ? [...new Set([...preferences.mutedAccounts, item.id])]
+                                                    : preferences.mutedAccounts.filter((id) => id !== item.id),
                                         })
                                     }
-                                    className="size-4 accent-[var(--primary)]"
                                 />
                                 Mute
-                            </label>
+                            </Label>
                             <Button
                                 variant="outline"
                                 size="sm"

@@ -3,6 +3,11 @@ import { Check, Palette, RotateCcw, Search, Shield, SlidersHorizontal } from "lu
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type AppearanceMode, type MailDensity, type Preferences, resetPreferences, updatePreferences, usePreferences } from "@/lib/preferences";
 import { type ThemeId, themeIds, themePresets } from "@/lib/theme-presets";
 
@@ -24,17 +29,17 @@ function PreferenceCheckbox({
     value: boolean;
 }) {
     return (
-        <label className="flex cursor-pointer items-center justify-between gap-6 rounded-lg border border-border bg-card/45 p-3 hover:bg-accent/30">
+        <Label className="flex cursor-pointer items-center justify-between gap-6 rounded-lg border border-border bg-card/45 p-3 hover:bg-accent/30">
             <span className="min-w-0">
                 <span className="block text-sm font-medium">{label}</span>
                 <span className="mt-1 block text-xs leading-5 text-muted-foreground">{description}</span>
             </span>
-            <input
-                type="checkbox"
+            <Switch
                 checked={value}
-                onChange={(event) => {
-                    if (field !== "desktopNotifications" || !event.target.checked) {
-                        updatePreferences({ [field]: event.target.checked } as Partial<Preferences>);
+                aria-label={label}
+                onCheckedChange={(checked) => {
+                    if (field !== "desktopNotifications" || !checked) {
+                        updatePreferences({ [field]: checked } as Partial<Preferences>);
                         return;
                     }
                     void (async () => {
@@ -46,9 +51,8 @@ function PreferenceCheckbox({
                         }
                     })();
                 }}
-                className="size-4 shrink-0 accent-[var(--primary)]"
             />
-        </label>
+        </Label>
     );
 }
 
@@ -56,12 +60,13 @@ function ThemeCard({ id, active, mode, onSelect }: { id: ThemeId; active: boolea
     const preset = themePresets[id];
     const palette = preset[mode];
     return (
-        <button
+        <Button
+            variant="outline"
             type="button"
             onClick={onSelect}
             aria-pressed={active}
             aria-label={`Use ${preset.label} theme`}
-            className={`min-w-0 rounded-lg border p-2 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${active ? "border-primary bg-primary/10" : "border-border hover:border-primary/50"}`}
+            className={`h-auto min-w-0 flex-col items-stretch gap-0 whitespace-normal rounded-lg border p-2 text-left transition ${active ? "border-primary bg-primary/10" : "border-border hover:border-primary/50"}`}
         >
             <div
                 className="h-[67px] overflow-hidden rounded-md border"
@@ -105,7 +110,7 @@ function ThemeCard({ id, active, mode, onSelect }: { id: ThemeId; active: boolea
                 <span className="min-w-0 flex-1 truncate">{preset.label}</span>
                 {active && <Check className="size-3.5 shrink-0 text-primary" />}
             </div>
-        </button>
+        </Button>
     );
 }
 
@@ -136,44 +141,49 @@ export function SettingsDialog({ open, onOpenChange, onAccountSettings }: Props)
                     </DialogHeader>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-                    <nav
-                        className="flex shrink-0 gap-1 border-b border-border p-3 sm:w-44 sm:flex-col sm:border-r sm:border-b-0"
-                        aria-label="Settings sections"
+                    <Tabs
+                        value={section}
+                        onValueChange={(value) => setSection(value as "appearance" | "mail" | "privacy")}
+                        className="flex min-h-0 flex-1 flex-col sm:flex-row"
                     >
-                        {(
-                            [
-                                ["appearance", Palette, "Appearance"],
-                                ["mail", SlidersHorizontal, "Mail"],
-                                ["privacy", Shield, "Privacy"],
-                            ] as const
-                        ).map(([id, Icon, label]) => (
-                            <button
-                                key={id}
-                                type="button"
-                                onClick={() => setSection(id)}
-                                aria-current={section === id ? "page" : undefined}
-                                className={`flex items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-medium transition ${section === id ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"}`}
+                        <TabsList
+                            className="flex h-auto shrink-0 justify-start gap-1 rounded-none border-b border-border bg-transparent p-3 sm:w-44 sm:flex-col sm:items-stretch sm:border-r sm:border-b-0"
+                            aria-label="Settings sections"
+                        >
+                            {(
+                                [
+                                    ["appearance", Palette, "Appearance"],
+                                    ["mail", SlidersHorizontal, "Mail"],
+                                    ["privacy", Shield, "Privacy"],
+                                ] as const
+                            ).map(([id, Icon, label]) => (
+                                <TabsTrigger
+                                    key={id}
+                                    value={id}
+                                    className="justify-start px-3 py-2 text-xs"
+                                >
+                                    <Icon className="size-4" /> {label}
+                                </TabsTrigger>
+                            ))}
+                        </TabsList>
+                        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+                            <TabsContent
+                                value="appearance"
+                                className="mt-0 space-y-6"
                             >
-                                <Icon className="size-4" /> {label}
-                            </button>
-                        ))}
-                    </nav>
-                    <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
-                        {section === "appearance" && (
-                            <div className="space-y-6">
                                 <section>
                                     <h2 className="text-sm font-semibold">Color theme</h2>
                                     <p className="mt-1 text-xs text-muted-foreground">
                                         TweakCN presets with their original colors, typography, corner radius and shadow styles. No custom tints or accents.
                                     </p>
                                     <div className="mt-4 flex flex-wrap items-center gap-2">
-                                        <label
+                                        <Label
                                             htmlFor="morrow-theme-mode"
                                             className="text-xs text-muted-foreground"
                                         >
                                             Appearance
-                                        </label>
-                                        <select
+                                        </Label>
+                                        <NativeSelect
                                             id="morrow-theme-mode"
                                             value={preferences.appearance}
                                             onChange={(e) => updatePreferences({ appearance: e.target.value as AppearanceMode })}
@@ -182,17 +192,17 @@ export function SettingsDialog({ open, onOpenChange, onAccountSettings }: Props)
                                             <option value="dark">Dark</option>
                                             <option value="light">Light</option>
                                             <option value="system">Follow system</option>
-                                        </select>
-                                        <label className="ml-auto flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-muted-foreground">
+                                        </NativeSelect>
+                                        <div className="ml-auto flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-muted-foreground">
                                             <Search className="size-3.5" />
-                                            <input
+                                            <Input
                                                 value={search}
                                                 onChange={(e) => setSearch(e.target.value)}
                                                 aria-label="Search themes"
                                                 placeholder="Find a theme"
-                                                className="h-9 w-28 bg-transparent text-xs text-foreground outline-none sm:w-40"
+                                                className="h-9 w-28 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0 sm:w-40"
                                             />
-                                        </label>
+                                        </div>
                                     </div>
                                     <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                                         {themeMatches.map((id) => (
@@ -212,13 +222,13 @@ export function SettingsDialog({ open, onOpenChange, onAccountSettings }: Props)
                                 <section className="space-y-3 border-t border-border pt-5">
                                     <h2 className="text-sm font-semibold">Display</h2>
                                     <div className="flex items-center justify-between gap-4">
-                                        <label
+                                        <Label
                                             htmlFor="mail-density"
                                             className="text-xs text-muted-foreground"
                                         >
                                             Message list density
-                                        </label>
-                                        <select
+                                        </Label>
+                                        <NativeSelect
                                             id="mail-density"
                                             value={preferences.density}
                                             onChange={(e) => updatePreferences({ density: e.target.value as MailDensity })}
@@ -226,16 +236,16 @@ export function SettingsDialog({ open, onOpenChange, onAccountSettings }: Props)
                                         >
                                             <option value="comfortable">Comfortable</option>
                                             <option value="compact">Compact</option>
-                                        </select>
+                                        </NativeSelect>
                                     </div>
                                     <div className="flex items-center justify-between gap-4">
-                                        <label
+                                        <Label
                                             htmlFor="font-scale"
                                             className="text-xs text-muted-foreground"
                                         >
                                             Base font scale
-                                        </label>
-                                        <select
+                                        </Label>
+                                        <NativeSelect
                                             id="font-scale"
                                             value={preferences.fontScale}
                                             onChange={(e) => updatePreferences({ fontScale: Number(e.target.value) })}
@@ -249,7 +259,7 @@ export function SettingsDialog({ open, onOpenChange, onAccountSettings }: Props)
                                                     {size}%
                                                 </option>
                                             ))}
-                                        </select>
+                                        </NativeSelect>
                                     </div>
                                     <PreferenceCheckbox
                                         field="loadOnlineFonts"
@@ -258,10 +268,11 @@ export function SettingsDialog({ open, onOpenChange, onAccountSettings }: Props)
                                         value={preferences.loadOnlineFonts}
                                     />
                                 </section>
-                            </div>
-                        )}
-                        {section === "mail" && (
-                            <div className="space-y-4">
+                            </TabsContent>
+                            <TabsContent
+                                value="mail"
+                                className="mt-0 space-y-4"
+                            >
                                 <h2 className="text-sm font-semibold">Reading mail</h2>
                                 <PreferenceCheckbox
                                     field="desktopNotifications"
@@ -302,10 +313,11 @@ export function SettingsDialog({ open, onOpenChange, onAccountSettings }: Props)
                                         Manage IMAP/SMTP account
                                     </Button>
                                 )}
-                            </div>
-                        )}
-                        {section === "privacy" && (
-                            <div className="space-y-4">
+                            </TabsContent>
+                            <TabsContent
+                                value="privacy"
+                                className="mt-0 space-y-4"
+                            >
                                 <h2 className="text-sm font-semibold">Privacy</h2>
                                 <PreferenceCheckbox
                                     field="allowRemoteImages"
@@ -317,9 +329,9 @@ export function SettingsDialog({ open, onOpenChange, onAccountSettings }: Props)
                                     Email HTML remains sandboxed and sanitized regardless of this setting. Passwords are stored separately in the operating
                                     system's credential vault, not in these preferences.
                                 </div>
-                            </div>
-                        )}
-                    </div>
+                            </TabsContent>
+                        </div>
+                    </Tabs>
                 </div>
                 <footer className="flex items-center justify-between gap-2 border-t border-border px-5 py-3">
                     <Button

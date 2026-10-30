@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface ConfirmActionProps {
     open: boolean;
@@ -96,12 +97,12 @@ export function CreateFolderDialog({ open, accountEmail, onClose, onCreate }: Cr
                     className="space-y-4"
                 >
                     <div className="space-y-2">
-                        <label
+                        <Label
                             htmlFor={id}
                             className="block text-sm font-medium"
                         >
                             Folder name
-                        </label>
+                        </Label>
                         <Input
                             id={id}
                             autoFocus

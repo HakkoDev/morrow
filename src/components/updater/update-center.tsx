@@ -166,14 +166,15 @@ export function UpdateCenter({ updater }: { updater: MorrowUpdater }) {
                             <p className="text-sm font-semibold">Morrow {version} is available</p>
                             <p className="mt-1 text-xs text-muted-foreground">A signed update is ready to install.</p>
                         </div>
-                        <button
-                            type="button"
-                            className="text-muted-foreground hover:text-foreground"
+                        <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="text-muted-foreground"
                             onClick={() => setDismissed(true)}
                             aria-label="Dismiss update notification"
                         >
                             <X className="size-4" />
-                        </button>
+                        </Button>
                     </div>
                     <Button
                         className="mt-3 w-full"

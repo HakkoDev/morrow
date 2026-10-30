@@ -158,8 +158,8 @@ test("Biome accessibility and React lifecycle fixes remain present", () => {
     assert.match('<MessageViewContent\n    key={props.message?.id ?? "no-message"}\n    {...props}\n/>', keyedReader);
     assert.doesNotMatch(view, /useEffect\(/);
     assert.doesNotMatch(entry, /getElementById\("root"\)!/);
-    assert.match(accountDialog, /<label htmlFor=\{id\}>/);
-    assert.match(sidebar, /<button\s+type="button"/);
+    assert.match(accountDialog, /<Label\s+htmlFor=\{id\}/);
+    assert.match(sidebar, /<DropdownMenuTrigger asChild>/);
     assert.doesNotMatch(sidebar, /<label className=.*>Account<\/label>/);
 });
 
@@ -216,8 +216,8 @@ test("mailbox and preferences retain Biome-compatible accessibility fixes", () =
     assert.doesNotMatch(sidebar, /const escape\s*=/);
     assert.match(sidebar, /<nav[^>]*aria-label="Mail folders"/);
     assert.doesNotMatch(sidebar, /<nav[^>]*tabIndex=/);
-    assert.match(sidebar, /role="menuitemradio"\s+aria-checked=/);
-    assert.match(sidebar, /aria-hidden="true">✓/);
+    assert.match(sidebar, /<DropdownMenuRadioGroup/);
+    assert.match(sidebar, /<DropdownMenuRadioItem/);
 
     assert.doesNotMatch(list, /const escape\s*=/);
     assert.match(list, /<section[^>]*aria-label="Message list\./);

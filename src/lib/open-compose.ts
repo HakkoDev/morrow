@@ -3,7 +3,18 @@ import { type ComposeSeed, clearComposeSeed, storeComposeSeed } from "@/componen
 
 export async function openComposeWindow(accountId: string, seed?: ComposeSeed | null, draftId?: string) {
     const token = crypto.randomUUID();
-    const label = `compose-${token.replaceAll("-", "")}`;
+    // Reopening a saved draft must not create two independently autosaving editors.
+    const identity = draftId ? new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([accountId, draftId])))) : null;
+    const label = identity
+        ? `compose-draft-${Array.from(identity, (byte) => byte.toString(16).padStart(2, "0")).join("")}`
+        : `compose-${token.replaceAll("-", "")}`;
+    if (draftId) {
+        const existing = await WebviewWindow.getByLabel(label);
+        if (existing) {
+            await existing.setFocus();
+            return;
+        }
+    }
     storeComposeSeed(token, seed);
 
     const composeWindow = new WebviewWindow(label, {

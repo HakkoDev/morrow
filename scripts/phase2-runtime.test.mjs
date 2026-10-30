@@ -24,9 +24,13 @@ function load(file, imports, context = {}) {
 test("outgoing HTML keeps basic formatting but strips active HTML, URLs and all attributes", () => {
     const dom = new JSDOM("");
     try {
-        const { sanitizeOutgoingHtml, escapeHtml } = load("src/lib/compose-html.ts", {
-            dompurify: { __esModule: true, default: createDOMPurify(dom.window) },
-        });
+        const { sanitizeOutgoingHtml, escapeHtml } = load(
+            "src/lib/compose-html.ts",
+            {
+                dompurify: { __esModule: true, default: createDOMPurify(dom.window) },
+            },
+            { DOMParser: dom.window.DOMParser },
+        );
         const input =
             '<p onclick="alert(1)" style="background:url(https://tracker)"><b>Bold</b><i>Italic</i></p><ul><li>List</li></ul><script>alert(1)</script><img src="https://tracker" onerror="alert(1)"><iframe srcdoc="evil"></iframe><a href="javascript:alert(1)">Link text</a><span data-secret="x" aria-label="x">Text</span>';
         const result = sanitizeOutgoingHtml(input);
@@ -45,11 +49,27 @@ test("composer recovers rich drafts, retains formatting on repeated mode selecti
     globalThis.document = dom.window.document;
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     const saves = [];
+    let automaticUpload;
+    const setTimeout = dom.window.setTimeout.bind(dom.window);
+    dom.window.setTimeout = (callback, delay, ...args) => {
+        if (delay === 6500) {
+            automaticUpload = callback;
+            return 0;
+        }
+        return setTimeout(callback, delay, ...args);
+    };
+    let uploads = 0;
+    let sends = 0;
+    let finishUpload;
     let closed = false;
     let root;
     try {
         const { createRoot } = await import("react-dom/client");
-        const html = load("src/lib/compose-html.ts", { dompurify: { __esModule: true, default: createDOMPurify(dom.window) } });
+        const html = load(
+            "src/lib/compose-html.ts",
+            { dompurify: { __esModule: true, default: createDOMPurify(dom.window) } },
+            { DOMParser: dom.window.DOMParser },
+        );
         const draft = {
             id: "draft",
             accountId: "a",
@@ -77,7 +97,20 @@ test("composer recovers rich drafts, retains formatting on repeated mode selecti
                 },
                 "@tauri-apps/plugin-dialog": { open: async () => null },
                 "lucide-react": Object.fromEntries(
-                    ["Bold", "FilePlus2", "Italic", "List", "LoaderCircle", "Paperclip", "Send", "X"].map((name) => [name, () => null]),
+                    [
+                        "Bold",
+                        "CloudUpload",
+                        "FilePlus2",
+                        "ImagePlus",
+                        "Italic",
+                        "List",
+                        "ListOrdered",
+                        "LoaderCircle",
+                        "Paperclip",
+                        "Send",
+                        "Underline",
+                        "X",
+                    ].map((name) => [name, () => null]),
                 ),
                 "@/components/ui/button": {
                     Button: ({ variant: _variant, size: _size, ...props }) => React.createElement("button", { type: "button", ...props }),
@@ -87,6 +120,16 @@ test("composer recovers rich drafts, retains formatting on repeated mode selecti
                 "@/lib/compose-html": html,
                 "@/lib/mail-api": {
                     mailApi: {
+                        setDraftEditorActive: async () => {},
+                        syncRemoteDraft: async () => {
+                            uploads++;
+                            await new Promise((resolve) => {
+                                finishUpload = resolve;
+                            });
+                        },
+                        sendMessage: async () => {
+                            sends++;
+                        },
                         listAccounts: async () => [{ id: "a", displayName: "Alice", email: "a@example.org" }],
                         listLocalDrafts: async () => [draft],
                         saveLocalDraft: async (saved) => {
@@ -115,6 +158,18 @@ test("composer recovers rich drafts, retains formatting on repeated mode selecti
         await React.act(async () => editor.dispatchEvent(drop));
         assert.equal(drop.defaultPrevented, true);
         assert.deepEqual(inserted, { command: "insertText", text: "safe text" });
+        await React.act(async () => automaticUpload());
+        assert.equal(uploads, 1);
+        await React.act(async () => {
+            for (const label of ["Sync draft", "Send"]) {
+                [...dom.window.document.querySelectorAll("button")].find((button) => button.textContent.trim() === label).click();
+            }
+            dom.window.document.querySelector('[title="Close composer"]').click();
+        });
+        assert.equal(uploads, 1);
+        assert.equal(sends, 0);
+        assert.equal(closed, false);
+        await React.act(async () => finishUpload());
         await React.act(async () => dom.window.document.querySelector('[title="Close composer"]').click());
         assert.equal(closed, true);
         assert.equal(saves.at(-1).htmlBody, "<p><b>Rich text</b></p>");
@@ -151,6 +206,44 @@ function notifier() {
         },
     };
 }
+
+test("reopening a saved draft focuses its existing account-scoped editor", async () => {
+    const windows = new Map();
+    const seeds = [];
+    let focused = 0;
+    class WebviewWindow {
+        static async getByLabel(label) {
+            return windows.get(label) ?? null;
+        }
+        constructor(label) {
+            windows.set(label, this);
+        }
+        async setFocus() {
+            focused++;
+        }
+        async once(event, callback) {
+            if (event === "tauri://created") callback();
+        }
+    }
+    const { openComposeWindow } = load(
+        "src/lib/open-compose.ts",
+        {
+            "@tauri-apps/api/webviewWindow": { WebviewWindow },
+            "@/components/mail/compose-window": { storeComposeSeed: (token) => seeds.push(token), clearComposeSeed: () => {} },
+        },
+        { crypto: globalThis.crypto, TextEncoder },
+    );
+    await openComposeWindow("a", null, "draft");
+    await openComposeWindow("a", null, "draft");
+    assert.equal(windows.size, 1);
+    assert.equal(focused, 1);
+    assert.equal(seeds.length, 1);
+    await openComposeWindow("b", null, "draft");
+    assert.equal(windows.size, 2);
+    await openComposeWindow("a");
+    await openComposeWindow("a");
+    assert.equal(windows.size, 4);
+});
 
 test("notifications are opt-in, per-account muted, permission-gated and private", async () => {
     const n = notifier();

@@ -1,0 +1,8 @@
+# Keep Rust formatting close to the Biome settings. rustfmt, not Biome, formats .rs files.
+edition = "2021"
+style_edition = "2021"
+max_width = 160
+tab_spaces = 4
+hard_tabs = false
+newline_style = "Unix"
+reorder_imports = true

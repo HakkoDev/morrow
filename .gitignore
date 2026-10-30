@@ -3,3 +3,21 @@ dist/
 src-tauri/target/
 .DS_Store
 *.log
+
+# Local secrets and generated release data
+.env
+.env.*
+!.env.example
+.local-certs/
+.tauri-signing/
+*.pem
+*.p12
+release-notes.md
+release-verify/
+BUILD_VERIFICATION.md
+*.key
+UPDATER_SETUP.md
+SMOKE_TESTS.md
+CHANGELOG.md
+docs/mailbox-behavior.md
+docs/dependency-lockfiles.md

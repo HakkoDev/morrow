@@ -1,0 +1,63 @@
+{
+    "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+    "files": {
+        "includes": [
+            "src/**",
+            "scripts/**",
+            "src-tauri/capabilities/**",
+            "src-tauri/tauri*.json",
+            "*.ts",
+            "*.mjs",
+            "*.json",
+            "!!**/node_modules",
+            "!!**/dist",
+            "!!**/target",
+            "!!src-tauri/gen",
+            "!!data",
+            "!!.local-certs",
+            "!!.git"
+        ]
+    },
+    "formatter": {
+        "indentStyle": "space",
+        "attributePosition": "multiline",
+        "indentWidth": 4,
+        "lineWidth": 160,
+        "lineEnding": "lf",
+        "expand": "auto"
+    },
+    "javascript": {
+        "formatter": {
+            "quoteStyle": "double",
+            "semicolons": "always",
+            "trailingCommas": "all",
+            "arrowParentheses": "always",
+            "bracketSameLine": false,
+            "bracketSpacing": true,
+            "delimiterSpacing": false,
+            "jsxQuoteStyle": "double",
+            "quoteProperties": "asNeeded"
+        }
+    },
+    "css": {
+        "parser": {
+            "tailwindDirectives": true
+        },
+        "formatter": {
+            "quoteStyle": "double"
+        }
+    },
+    "assist": {
+        "actions": {
+            "source": {
+                "organizeImports": "on"
+            }
+        }
+    },
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "preset": "recommended"
+        }
+    }
+}

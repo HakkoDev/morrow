@@ -15,7 +15,12 @@ jobs:
     timeout-minutes: 50
     steps:
       - name: Checkout project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -34,10 +39,28 @@ jobs:
           workspaces: src-tauri -> target
 
       - name: Install frontend dependencies from lockfile
-        run: bun install
+        run: bun install --frozen-lockfile
+
+      - name: Verify Tauri dependency pins
+        run: bun run deps:check
+
+      - name: Check source regressions
+        run: bun run test:source
+
+      - name: Biome formatting, lint and import checks
+        run: bun run biome:check
+
+      - name: Typecheck frontend
+        run: bun run typecheck
+
+      - name: Verify app and Tauri versions
+        run: node scripts/verify-versions.mjs
 
       - name: Build frontend
         run: bun run build
+
+      - name: Verify Rust formatting (read-only)
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
       - name: Check Rust compilation
         run: cargo check --manifest-path src-tauri/Cargo.toml
@@ -59,7 +82,7 @@ jobs:
           $installers | ForEach-Object { Write-Host "Installer: $($_.FullName), bytes: $($_.Length)" }
 
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: morrow-dev-windows-nsis-no-updates
           path: src-tauri/target/release/bundle/nsis/*-setup.exe

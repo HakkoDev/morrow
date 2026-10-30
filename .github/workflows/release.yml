@@ -22,12 +22,12 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
       - name: Validate tag / app versions and create notes
         id: version
         shell: bash
@@ -86,7 +86,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -104,7 +104,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - name: Install frontend dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
       - name: Validate source, frontend and release settings
         shell: bash
         env:
@@ -113,11 +113,16 @@ jobs:
           GITHUB_REF_TYPE: ${{ github.ref_type }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
+          bun run deps:check
+          bun run test:source
+          bun run biome:check
+          bun run typecheck
           node scripts/verify-versions.mjs
           node scripts/prepare-release.mjs
       - name: Rust formatting and lint checks
         shell: bash
         run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
       - name: Rust compilation and tests
         shell: bash
@@ -143,10 +148,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
       - name: Download release metadata and validate both platforms
         shell: bash
         env:

@@ -171,15 +171,17 @@ test("cached messages and message details are isolated by account", () => {
     assert.match(backend, /pub async fn save_account/);
     assert.match(backend, /imap::test\(&input\.account/);
     assert.match(backend, /smtp::test\(&input\.account/);
-    assert.match(app, /rows\.some\(\(row\) => row\.accountId !== accountId/);
-    assert.match(app, /summary\.accountId !== active\.accountId/);
+    assert.match(app, /row\.accountId !== accountId/);
+    assert.match(app, /name === UNIFIED/);
+    assert.match(app, /summary\.accountId/);
+    assert.match(app, /summary\.accountId !== active\.accountId|summary\.accountId, summary\.id/);
 });
 
 test("mail context menu and folder tools use explicit account-scoped commands", () => {
     const app = read("src/App.tsx");
     const list = read("src/components/mail/message-list.tsx");
     const sidebar = read("src/components/mail/mail-sidebar.tsx");
-    assert.match(app, /mailApi\.saveMessage\(active\.accountId/);
+    assert.match(app, /mailApi\.saveMessage\(scoped\[0\]\.accountId/);
     assert.match(app, /mailApi\.createFolder\(active\.id/);
     assert.match(list, /event\.key\.toLowerCase\(\) === "a"/);
     assert.match(list, /onContextMenu/);
@@ -198,7 +200,7 @@ test("keyboard select-all and account-scoped mail never hijack text inputs", () 
     assert.match(app, /event\.ctrlKey \|\| event\.metaKey/);
     assert.match(app, /target\.closest\('input, textarea, select/);
     assert.match(app, /setSelection\(messagesRef\.current\.map/);
-    assert.match(app, /mailApi\.getMessage\(active\.accountId/);
+    assert.match(app, /mailApi\.getMessage\(summary\.accountId/);
 });
 
 test("mailbox and preferences retain Biome-compatible accessibility fixes", () => {

@@ -56,6 +56,7 @@ pub struct MessageSummary {
     pub folder: String,
     pub uid: u32,
     pub message_id: Option<String>,
+    pub thread_key: String,
     pub subject: String,
     pub sender: String,
     pub recipients: String,
@@ -96,7 +97,30 @@ pub struct SendMessageInput {
     pub subject: String,
     pub body: String,
     #[serde(default)]
+    pub in_reply_to: Option<String>,
+    #[serde(default)]
+    pub references: Option<String>,
+    #[serde(default)]
     pub attachments: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalDraft {
+    pub id: String,
+    pub account_id: String,
+    pub to: String,
+    pub cc: String,
+    pub bcc: String,
+    pub subject: String,
+    pub body: String,
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
+    #[serde(default)]
+    pub references: Option<String>,
+    pub attachments: Vec<String>,
+    #[serde(default)]
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]

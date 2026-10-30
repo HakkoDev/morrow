@@ -65,3 +65,7 @@ Inspect the timings for **Build signed packages**, **Linux native dependencies**
 and **Cache Rust dependencies** if future builds seem slow. A cold cache will still
 require substantial Rust compilation. Never overwrite an already published
 release tag just to rerun the build.
+
+## License and contributions
+
+Morrow is distributed under [GPLv3](LICENSE) (`GPL-3.0-only`). By submitting a contribution, you agree that it may be distributed under the same license. Only submit code and assets you have the right to contribute.

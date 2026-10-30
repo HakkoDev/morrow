@@ -2,18 +2,22 @@ import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { FilePlus2, LoaderCircle, Paperclip, Send, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { mailApi } from "@/lib/mail-api";
-import type { Account } from "@/lib/types";
+import type { Account, LocalDraft } from "@/lib/types";
 
 export interface ComposeSeed {
     to?: string;
     cc?: string;
+    bcc?: string;
+    attachments?: string[];
     subject?: string;
     body?: string;
+    inReplyTo?: string | null;
+    references?: string | null;
 }
 
 const SEED_PREFIX = "mail-compose-seed:";
@@ -43,23 +47,33 @@ export function ComposeWindow() {
     const params = new URLSearchParams(window.location.search);
     const accountId = params.get("accountId") || "";
     const seedKey = params.get("seedKey");
+    const existingDraftId = params.get("draftId");
+    const draftId = useRef(existingDraftId || crypto.randomUUID());
+    const lastSave = useRef<Promise<void>>(Promise.resolve());
 
     const [account, setAccount] = useState<Account | null>(null);
     const [to, setTo] = useState("");
     const [cc, setCc] = useState("");
     const [bcc, setBcc] = useState("");
     const [subject, setSubject] = useState("");
+    const [inReplyTo, setInReplyTo] = useState<string | null>(null);
+    const [references, setReferences] = useState<string | null>(null);
     const [body, setBody] = useState("");
     const [attachments, setAttachments] = useState<string[]>([]);
     const [busy, setBusy] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [draftState, setDraftState] = useState<"idle" | "saving" | "saved">("idle");
 
     useEffect(() => {
         const seed = readSeed(seedKey);
         setTo(seed.to || "");
         setCc(seed.cc || "");
+        setBcc(seed.bcc || "");
+        setAttachments(seed.attachments || []);
         setSubject(seed.subject || "");
+        setInReplyTo(seed.inReplyTo || null);
+        setReferences(seed.references || null);
         setBody(seed.body || "");
 
         void (async () => {
@@ -68,13 +82,80 @@ export function ComposeWindow() {
                 const active = accounts.find((item) => item.id === accountId) || null;
                 if (!active) throw new Error("The sending account could not be found.");
                 setAccount(active);
+                if (existingDraftId) {
+                    const drafts = await mailApi.listLocalDrafts(accountId);
+                    const draft = drafts.find((item) => item.id === existingDraftId);
+                    if (!draft) throw new Error("This local draft no longer exists.");
+                    setTo(draft.to);
+                    setCc(draft.cc);
+                    setBcc(draft.bcc);
+                    setSubject(draft.subject);
+                    setInReplyTo(draft.inReplyTo || null);
+                    setReferences(draft.references || null);
+                    setBody(draft.body);
+                    setAttachments(draft.attachments);
+                }
             } catch (e) {
                 setError(String(e));
             } finally {
                 setLoading(false);
             }
         })();
-    }, [accountId, seedKey]);
+    }, [accountId, seedKey, existingDraftId]);
+
+    // SQLite is the source of truth for drafts. Autosave independently of the
+    // mailbox window; failed sends never destroy the local draft.
+    const draft = (): LocalDraft => ({
+        id: draftId.current,
+        accountId,
+        to,
+        cc,
+        bcc,
+        subject,
+        body,
+        attachments,
+        inReplyTo,
+        references,
+        updatedAt: 0,
+    });
+    const hasContent = Boolean(to.trim() || cc.trim() || bcc.trim() || subject.trim() || body.trim() || attachments.length);
+    const saveDraft = async (): Promise<boolean> => {
+        if (!account || !hasContent) return true;
+        setDraftState("saving");
+        const job = mailApi.saveLocalDraft(draft());
+        lastSave.current = job;
+        try {
+            await job;
+            setDraftState("saved");
+            await emit("mail:drafts-updated", { accountId }).catch(() => undefined);
+            return true;
+        } catch (cause) {
+            setError(`Could not save local draft: ${String(cause)}`);
+            return false;
+        }
+    };
+    useEffect(() => {
+        if (loading || !account || busy || !hasContent) return;
+        setDraftState("idle");
+        const snapshot: LocalDraft = { id: draftId.current, accountId, to, cc, bcc, subject, body, attachments, inReplyTo, references, updatedAt: 0 };
+        const timer = window.setTimeout(() => {
+            setDraftState("saving");
+            const job = mailApi.saveLocalDraft(snapshot);
+            lastSave.current = job;
+            void job
+                .then(async () => {
+                    setDraftState("saved");
+                    await emit("mail:drafts-updated", { accountId }).catch(() => undefined);
+                })
+                .catch((cause) => setError(`Could not save local draft: ${String(cause)}`));
+        }, 900);
+        return () => window.clearTimeout(timer);
+    }, [loading, account, busy, hasContent, accountId, to, cc, bcc, subject, body, attachments, inReplyTo, references]);
+
+    async function closeComposer() {
+        await lastSave.current.catch(() => undefined);
+        if (await saveDraft()) await getCurrentWindow().close();
+    }
 
     async function chooseAttachments() {
         try {
@@ -92,6 +173,7 @@ export function ComposeWindow() {
         setBusy(true);
         setError(null);
         try {
+            await lastSave.current.catch(() => undefined);
             await mailApi.sendMessage({
                 accountId: account.id,
                 to,
@@ -100,9 +182,17 @@ export function ComposeWindow() {
                 subject,
                 body,
                 attachments,
+                inReplyTo,
+                references,
             });
-            await emit("mail:sent", { accountId: account.id });
-            await getCurrentWindow().close();
+            // SMTP accepted the message. Cleanup and events are best-effort,
+            // and must not surface as a send error that prompts another send.
+            await mailApi.deleteLocalDraft(account.id, draftId.current).catch(() => undefined);
+            await emit("mail:drafts-updated", { accountId: account.id }).catch(() => undefined);
+            await emit("mail:sent", { accountId: account.id }).catch(() => undefined);
+            await getCurrentWindow()
+                .close()
+                .catch(() => undefined);
         } catch (e) {
             setError(String(e));
             setBusy(false);
@@ -132,7 +222,7 @@ export function ComposeWindow() {
                     variant="ghost"
                     size="icon"
                     className="size-8"
-                    onClick={() => void getCurrentWindow().close()}
+                    onClick={() => void closeComposer()}
                     disabled={busy}
                     title="Close composer"
                 >
@@ -210,6 +300,12 @@ export function ComposeWindow() {
             )}
 
             <footer className="flex shrink-0 items-center justify-between border-t border-border bg-muted/20 px-5 py-3">
+                <span
+                    aria-live="polite"
+                    className="text-[11px] text-muted-foreground"
+                >
+                    {draftState === "saved" ? "Saved locally" : draftState === "saving" ? "Saving draft…" : "Drafts are saved locally"}
+                </span>
                 <Button
                     variant="ghost"
                     onClick={() => void chooseAttachments()}

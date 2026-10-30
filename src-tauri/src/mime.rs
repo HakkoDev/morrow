@@ -13,6 +13,18 @@ pub fn cache_message(raw: &[u8], account_id: &str, folder: &str, uid: u32, flags
     let recipients = headers.get_first_value("To").unwrap_or_default();
     let cc = headers.get_first_value("Cc").unwrap_or_default();
     let message_id = headers.get_first_value("Message-ID");
+    // The first References ID identifies the conversation root, including replies
+    // across differently named folders. Never mix accounts when displaying threads.
+    let references = headers.get_first_value("References").unwrap_or_default();
+    let parent = headers.get_first_value("In-Reply-To").unwrap_or_default();
+    let thread_key = references
+        .split_whitespace()
+        .next()
+        .or_else(|| parent.split_whitespace().next())
+        .or(message_id.as_deref())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     let date = headers.get_first_value("Date").and_then(|value| dateparse(&value).ok()).unwrap_or(0);
     let (text, _) = extract_bodies(&parsed);
     let preview = preview(&text, 240);
@@ -22,6 +34,8 @@ pub fn cache_message(raw: &[u8], account_id: &str, folder: &str, uid: u32, flags
         folder: folder.to_string(),
         uid,
         message_id,
+        thread_key,
+        body_text: text,
         subject,
         sender,
         recipients,
@@ -178,6 +192,7 @@ mod tests {
             folder: "INBOX".into(),
             uid: 12,
             message_id: None,
+            thread_key: String::new(),
             subject: String::new(),
             sender: String::new(),
             recipients: String::new(),
@@ -198,6 +213,14 @@ mod tests {
         let detailed = message_detail(summary(), String::new(), raw).unwrap();
         assert!(detailed.body_text.contains("Hello from Morrow"));
         assert!(detailed.attachments.is_empty());
+    }
+
+    #[test]
+    fn conversation_root_comes_from_references() {
+        let raw = b"Message-ID: <reply@example.org>\r\nIn-Reply-To: <parent@example.org>\r\nReferences: <root@example.org> <parent@example.org>\r\nSubject: Re: hello\r\n\r\nMessage body";
+        let parsed = cache_message(raw, "a", "INBOX", 3, vec![]).unwrap();
+        assert_eq!(parsed.thread_key, "<root@example.org>");
+        assert_eq!(parsed.body_text, "Message body");
     }
 
     #[test]

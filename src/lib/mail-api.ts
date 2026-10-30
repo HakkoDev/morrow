@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, AccountInput, ConnectionTestResult, Folder, MessageDetail, MessageSummary, SendMessageInput } from "./types";
+import type { Account, AccountInput, ConnectionTestResult, Folder, LocalDraft, MessageDetail, MessageSummary, SendMessageInput } from "./types";
 
 export const mailApi = {
     listAccounts: () => invoke<Account[]>("list_accounts"),
@@ -13,6 +13,13 @@ export const mailApi = {
     saveMessage: (accountId: string, messageId: number, path: string) => invoke<void>("save_message", { accountId, messageId, path }),
     syncFolder: (accountId: string, folder: string, limit = 100) => invoke<number>("sync_folder", { accountId, folder, limit }),
     listMessages: (accountId: string, folder: string, query = "") => invoke<MessageSummary[]>("list_messages", { accountId, folder, query }),
+    unifiedInbox: () => invoke<MessageSummary[]>("unified_inbox"),
+    unreadCounts: () => invoke<Record<string, number>>("unread_counts"),
+    searchCached: (query: string, accountId?: string) => invoke<MessageSummary[]>("search_cached_messages", { query, accountId: accountId || null }),
+    conversation: (accountId: string, threadKey: string) => invoke<MessageSummary[]>("conversation", { accountId, threadKey }),
+    saveLocalDraft: (draft: LocalDraft) => invoke<void>("save_local_draft", { draft }),
+    listLocalDrafts: (accountId: string) => invoke<LocalDraft[]>("list_local_drafts", { accountId }),
+    deleteLocalDraft: (accountId: string, draftId: string) => invoke<void>("delete_local_draft", { accountId, draftId }),
     getMessage: (accountId: string, messageId: number) => invoke<MessageDetail>("get_message", { accountId, messageId }),
     setMessageFlag: (accountId: string, folder: string, uid: number, flag: string, enabled: boolean) =>
         invoke<void>("set_message_flag", { accountId, folder, uid, flag, enabled }),

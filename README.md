@@ -2,7 +2,7 @@
 
 A desktop email client built with Tauri, Rust and React.
 
-Morrow brings multiple IMAP/SMTP accounts into a customizable interface with various themes. It supports a three-pane inbox, separate compose windows, attachments and local message caching.
+Morrow brings multiple IMAP/SMTP accounts into a customizable interface with various themes. It supports a three-pane inbox, separate compose windows, attachments and local message caching. The 0.2 development branch adds a unified inbox, local drafts, conversation navigation, and cached full-text search.
 
 > **Status:** Early development. Expect bugs and breaking changes.
 
@@ -39,3 +39,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release conventions.
 ## Updates
 
 Release builds can check for signed updates through GitHub Releases. Updater signing and publishing are documented in [UPDATER_SETUP.md](UPDATER_SETUP.md).
+
+## License
+
+Morrow is licensed under the [GNU General Public License v3.0](LICENSE) (`GPL-3.0-only`).

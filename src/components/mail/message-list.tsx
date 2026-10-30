@@ -11,6 +11,8 @@ export type MessageAction = "delete" | "spam" | "read" | "unread" | "star" | "un
 interface Props {
     accountId: string;
     folder: string;
+    unified?: boolean;
+    accountEmails?: Record<string, string>;
     messages: MessageSummary[];
     selectedId?: number | null;
     selection: number[];
@@ -30,6 +32,8 @@ export function MessageList(props: Props) {
     const {
         accountId,
         folder,
+        unified = false,
+        accountEmails = {},
         messages,
         selectedId,
         selection,
@@ -148,7 +152,7 @@ export function MessageList(props: Props) {
         <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-border bg-background/70">
             <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
                 <div className="min-w-0">
-                    <h1 className="truncate text-sm font-semibold">{folderLabel(folder)}</h1>
+                    <h1 className="truncate text-sm font-semibold">{unified ? (query ? "Search all mail" : "Unified Inbox") : folderLabel(folder)}</h1>
                     <p className="text-[10px] text-muted-foreground">
                         {selection.length ? `${selection.length} selected` : `${messages.length} cached messages`}
                     </p>
@@ -172,7 +176,7 @@ export function MessageList(props: Props) {
                         className="h-8 pl-8 text-xs"
                         value={query}
                         onChange={(e) => onQueryChange(e.target.value)}
-                        placeholder="Search cached mail"
+                        placeholder={unified ? "Search all accounts" : "Search cached mail"}
                         aria-label="Search cached messages"
                     />
                 </div>
@@ -250,6 +254,11 @@ export function MessageList(props: Props) {
                                         <div className={cn("mt-0.5 truncate text-xs", unread ? "font-semibold" : "text-foreground/85")}>
                                             {message.subject || "(no subject)"}
                                         </div>
+                                        {unified && (
+                                            <div className="mt-0.5 truncate text-[10px] text-primary">
+                                                {accountEmails[message.accountId] || message.accountId} · {folderLabel(message.folder)}
+                                            </div>
+                                        )}
                                         {preferences.showPreviews && (
                                             <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">{message.preview}</div>
                                         )}

@@ -1,7 +1,7 @@
 {
     "name": "morrow-mail",
     "private": true,
-    "version": "0.1.7",
+    "version": "0.2.0",
     "type": "module",
     "scripts": {
         "dev": "vite",
@@ -63,5 +63,6 @@
         "typescript": "~7.0.2",
         "vite": "^8.0.0",
         "@biomejs/biome": "2.5.15"
-    }
+    },
+    "license": "GPL-3.0-only"
 }

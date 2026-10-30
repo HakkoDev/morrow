@@ -7,7 +7,7 @@ use crate::{
     credentials,
     db::Database,
     imap, mime,
-    models::{Account, AccountInput, ConnectionTestResult, FolderInfo, MessageDetail, MessageSummary, SendMessageInput},
+    models::{Account, AccountInput, ConnectionTestResult, FolderInfo, LocalDraft, MessageDetail, MessageSummary, SendMessageInput},
     smtp,
 };
 
@@ -175,6 +175,46 @@ pub async fn sync_folder(state: State<'_, AppState>, account_id: String, folder:
 #[tauri::command]
 pub fn list_messages(state: State<'_, AppState>, account_id: String, folder: String, query: String) -> Result<Vec<MessageSummary>, String> {
     state.db.list_messages(&account_id, &folder, &query)
+}
+
+#[tauri::command]
+pub fn unread_counts(state: State<'_, AppState>) -> Result<std::collections::HashMap<String, usize>, String> {
+    state.db.unread_counts()
+}
+
+#[tauri::command]
+pub fn unified_inbox(state: State<'_, AppState>) -> Result<Vec<MessageSummary>, String> {
+    state.db.unified_inbox()
+}
+
+#[tauri::command]
+pub fn search_cached_messages(state: State<'_, AppState>, query: String, account_id: Option<String>) -> Result<Vec<MessageSummary>, String> {
+    state.db.search_messages(&query, account_id.as_deref())
+}
+
+#[tauri::command]
+pub fn conversation(state: State<'_, AppState>, account_id: String, thread_key: String) -> Result<Vec<MessageSummary>, String> {
+    state.db.conversation(&account_id, &thread_key)
+}
+
+#[tauri::command]
+pub fn save_local_draft(state: State<'_, AppState>, draft: LocalDraft) -> Result<(), String> {
+    if draft.id.len() > 128 || draft.id.is_empty() || draft.attachments.len() > 40 {
+        return Err("Invalid draft".into());
+    }
+    state.db.get_account(&draft.account_id)?;
+    state.db.save_local_draft(&draft)
+}
+
+#[tauri::command]
+pub fn list_local_drafts(state: State<'_, AppState>, account_id: String) -> Result<Vec<LocalDraft>, String> {
+    state.db.get_account(&account_id)?;
+    state.db.local_drafts(&account_id)
+}
+
+#[tauri::command]
+pub fn delete_local_draft(state: State<'_, AppState>, account_id: String, draft_id: String) -> Result<(), String> {
+    state.db.delete_local_draft(&account_id, &draft_id)
 }
 
 #[tauri::command]

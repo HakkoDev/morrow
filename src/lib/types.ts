@@ -36,6 +36,7 @@ export interface MessageSummary {
     folder: string;
     uid: number;
     messageId?: string | null;
+    threadKey: string;
     subject: string;
     sender: string;
     recipients: string;
@@ -65,10 +66,26 @@ export interface SendMessageInput {
     bcc?: string;
     subject: string;
     body: string;
+    inReplyTo?: string | null;
+    references?: string | null;
     attachments: string[];
 }
 
 export interface ConnectionTestResult {
     imap: boolean;
     smtp: boolean;
+}
+
+export interface LocalDraft {
+    id: string;
+    accountId: string;
+    to: string;
+    cc: string;
+    bcc: string;
+    subject: string;
+    body: string;
+    inReplyTo?: string | null;
+    references?: string | null;
+    attachments: string[];
+    updatedAt: number;
 }

@@ -1,4 +1,19 @@
-import { Archive, ChevronDown, FilePlus2, FileText, Inbox, Mail, PenLine, RefreshCw, Send, Settings, SlidersHorizontal, Trash2 } from "lucide-react";
+import {
+    Archive,
+    ChevronDown,
+    FilePlus2,
+    FileText,
+    Inbox,
+    Layers3,
+    Mail,
+    PenLine,
+    RefreshCw,
+    Send,
+    Settings,
+    SlidersHorizontal,
+    Star,
+    Trash2,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { folderLabel } from "@/lib/folder-labels";
@@ -9,7 +24,13 @@ interface Props {
     accounts: Account[];
     account: Account | null;
     folders: Folder[];
+    favorites: string[];
+    unreadCounts: Record<string, number>;
+    onToggleFavorite: (folder: string) => void;
     folder: string;
+    unified: boolean;
+    onUnifiedInbox: () => void;
+    onLocalDrafts: () => void;
     onAccountChange: (account: Account) => void;
     onManageAccounts: () => void;
     onFolderChange: (folder: string) => void;
@@ -140,6 +161,14 @@ export function MailSidebar(props: Props) {
                                     <span className="block truncate font-medium">{item.displayName || item.email}</span>
                                     <span className="block truncate text-[11px] text-muted-foreground">{item.email}</span>
                                 </span>
+                                {(props.unreadCounts[item.id] ?? 0) > 0 && (
+                                    <span
+                                        className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
+                                        title="Cached unread mail"
+                                    >
+                                        {props.unreadCounts[item.id]}
+                                    </span>
+                                )}
                                 {item.id === props.account?.id && <span aria-hidden="true">✓</span>}
                             </button>
                         ))}
@@ -157,6 +186,26 @@ export function MailSidebar(props: Props) {
                         </button>
                     </div>
                 )}
+            </div>
+            <div className="shrink-0 space-y-1 px-3 pb-2">
+                <button
+                    type="button"
+                    aria-current={props.unified ? "page" : undefined}
+                    onClick={props.onUnifiedInbox}
+                    className={cn(
+                        "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs transition hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring",
+                        props.unified && "bg-accent font-medium",
+                    )}
+                >
+                    <Layers3 className="size-4" /> Unified Inbox
+                </button>
+                <button
+                    type="button"
+                    onClick={props.onLocalDrafts}
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                    <FileText className="size-4" /> Local drafts
+                </button>
             </div>
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3">
                 <div className="flex shrink-0 items-center justify-between py-2">
@@ -177,6 +226,7 @@ export function MailSidebar(props: Props) {
                 >
                     {props.folders
                         .filter((item) => item.selectable)
+                        .sort((a, b) => Number(props.favorites.includes(b.name)) - Number(props.favorites.includes(a.name)))
                         .map((item) => {
                             const Icon = folderIcon(item.name);
                             return (
@@ -204,6 +254,15 @@ export function MailSidebar(props: Props) {
                                         >
                                             {folderLabel(item.name, item.delimiter)}
                                         </span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        aria-label={`${props.favorites.includes(item.name) ? "Unfavorite" : "Favorite"} ${folderLabel(item.name, item.delimiter)}`}
+                                        aria-pressed={props.favorites.includes(item.name)}
+                                        onClick={() => props.onToggleFavorite(item.name)}
+                                        className="cursor-pointer rounded p-1.5 text-muted-foreground transition hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
+                                    >
+                                        <Star className={`size-3.5 ${props.favorites.includes(item.name) ? "fill-current text-primary" : ""}`} />
                                     </button>
                                     {!systemFolder(item) && (
                                         <button

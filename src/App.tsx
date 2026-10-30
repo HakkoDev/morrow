@@ -4,6 +4,7 @@ import { LoaderCircle, MailPlus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AccountDialog } from "@/components/mail/account-dialog";
 import type { ComposeSeed } from "@/components/mail/compose-window";
+import { LocalDraftsDialog } from "@/components/mail/local-drafts-dialog";
 import { ConfirmActionDialog, CreateFolderDialog } from "@/components/mail/mail-action-dialogs";
 import { MailSidebar } from "@/components/mail/mail-sidebar";
 import { ManageAccountsDialog } from "@/components/mail/manage-accounts-dialog";
@@ -12,13 +13,16 @@ import { MessageView } from "@/components/mail/message-view";
 import { SettingsDialog } from "@/components/settings/settings-dialog";
 import { Button } from "@/components/ui/button";
 import { UpdateCenter, useMorrowUpdater } from "@/components/updater/update-center";
+import { favoriteFolders, toggleFavoriteFolder } from "@/lib/favorite-folders";
 import { folderLabel } from "@/lib/folder-labels";
 import { mailApi } from "@/lib/mail-api";
 import { openComposeWindow } from "@/lib/open-compose";
 import { usePreferences } from "@/lib/preferences";
-import type { Account, Folder, MessageDetail, MessageSummary } from "@/lib/types";
+import type { Account, Folder, LocalDraft, MessageDetail, MessageSummary } from "@/lib/types";
 
 const DEFAULT_FOLDER = "INBOX";
+const UNIFIED = "__unified__";
+const ALL_ACCOUNTS = "__all_accounts__";
 function isRead(flags: string[]) {
     return flags.some((flag) => flag.replace(/^\\/, "") === "Seen");
 }
@@ -28,9 +32,13 @@ export default function App() {
     const preferences = usePreferences();
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [manageOpen, setManageOpen] = useState(false);
+    const [localDraftsOpen, setLocalDraftsOpen] = useState(false);
+    const [conversation, setConversation] = useState<MessageSummary[]>([]);
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [account, setAccount] = useState<Account | null>(null);
     const [folders, setFolders] = useState<Folder[]>([]);
+    const [favorites, setFavorites] = useState<string[]>([]);
+    const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
     const [folder, setFolder] = useState(DEFAULT_FOLDER);
     const [messages, setMessages] = useState<MessageSummary[]>([]);
     const [selection, setSelection] = useState<number[]>([]);
@@ -67,6 +75,7 @@ export default function App() {
             setMessageRows([]);
             setSelection([]);
             setSelected(null);
+            setConversation([]);
             setFolder(nextFolder);
             searchRef.current = "";
             messageRequest.current += 1;
@@ -84,13 +93,26 @@ export default function App() {
     const loadCached = useCallback(
         async (accountId: string, name: string, search: string, revision: number) => {
             try {
-                const rows = await mailApi.listMessages(accountId, name, search);
+                const rows =
+                    name === UNIFIED
+                        ? search.trim()
+                            ? await mailApi.searchCached(search)
+                            : await mailApi.unifiedInbox()
+                        : await mailApi.listMessages(accountId, name, search);
                 if (current.current.accountId !== accountId || current.current.folder !== name || current.current.revision !== revision) return;
                 // Also check the returned rows; a stale backend response must never
                 // populate a different account's view.
-                if (rows.some((row) => row.accountId !== accountId || row.folder !== name))
+                if (
+                    rows.some((row) =>
+                        name === UNIFIED ? !search.trim() && row.folder.toUpperCase() !== "INBOX" : row.accountId !== accountId || row.folder !== name,
+                    )
+                )
                     throw new Error("Mailbox cache returned a mismatched account/folder");
                 setMessageRows(rows);
+                void mailApi
+                    .unreadCounts()
+                    .then(setUnreadCounts)
+                    .catch(() => undefined);
                 setSelected((old) => (old && !rows.some((row) => row.id === old.id) ? null : old));
                 setSelection((previous) => previous.filter((id) => rows.some((row) => row.id === id)));
             } catch (cause) {
@@ -116,7 +138,12 @@ export default function App() {
             const token = ++refreshToken.current;
             if (announceErrors && current.current.revision === revision) setLoading(true);
             try {
-                await mailApi.syncFolder(accountId, name, limit);
+                if (name === UNIFIED) {
+                    const results = await Promise.allSettled((await mailApi.listAccounts()).map((item) => mailApi.syncFolder(item.id, DEFAULT_FOLDER, limit)));
+                    if (results.every((result) => result.status === "rejected")) throw new Error("Could not synchronize any connected inbox.");
+                } else {
+                    await mailApi.syncFolder(accountId, name, limit);
+                }
                 if (current.current.accountId === accountId && current.current.folder === name && current.current.revision === revision) {
                     await loadCached(accountId, name, searchRef.current, revision);
                 }
@@ -133,9 +160,10 @@ export default function App() {
 
     const activateAccount = useCallback(
         async (next: Account, force = false) => {
-            if (!force && accountRef.current?.id === next.id) return;
+            if (!force && accountRef.current?.id === next.id && current.current.folder !== UNIFIED) return;
             accountRef.current = next;
             setAccount(next);
+            setFavorites(favoriteFolders(next.id));
             setFolders([]);
             const revision = resetView(next.id, DEFAULT_FOLDER);
             const [cached] = await Promise.all([mailApi.cachedFolders(next.id).catch(() => [] as Folder[]), loadCached(next.id, DEFAULT_FOLDER, "", revision)]);
@@ -147,6 +175,12 @@ export default function App() {
         [resetView, loadCached, refreshFolderList],
     );
 
+    const activateUnified = useCallback(() => {
+        if (current.current.folder === UNIFIED) return;
+        const revision = resetView(ALL_ACCOUNTS, UNIFIED);
+        void loadCached(ALL_ACCOUNTS, UNIFIED, "", revision);
+    }, [resetView, loadCached]);
+
     useEffect(() => {
         let cancelled = false;
         void mailApi
@@ -154,6 +188,10 @@ export default function App() {
             .then(async (rows) => {
                 if (cancelled) return;
                 setAccounts(rows);
+                void mailApi
+                    .unreadCounts()
+                    .then(setUnreadCounts)
+                    .catch(() => undefined);
                 if (rows[0]) await activateAccount(rows[0]);
             })
             .catch((cause) => {
@@ -173,7 +211,11 @@ export default function App() {
         const subscribe = async () => {
             const mail = await listen<{ accountId: string; folder: string }>("mail:synced", ({ payload }) => {
                 const active = current.current;
-                if (!disposed && active.accountId === payload.accountId && active.folder.toUpperCase() === payload.folder.toUpperCase()) {
+                if (
+                    !disposed &&
+                    ((active.folder === UNIFIED && payload.folder.toUpperCase() === "INBOX") ||
+                        (active.accountId === payload.accountId && active.folder.toUpperCase() === payload.folder.toUpperCase()))
+                ) {
                     void loadCached(active.accountId, active.folder, searchRef.current, active.revision);
                 }
             });
@@ -234,14 +276,19 @@ export default function App() {
             searchRef.current = text;
             setQuery(text);
             const active = current.current;
-            void mailApi
-                .listMessages(active.accountId, active.folder, text)
+            void (
+                active.folder === UNIFIED
+                    ? text.trim()
+                        ? mailApi.searchCached(text)
+                        : mailApi.unifiedInbox()
+                    : mailApi.listMessages(active.accountId, active.folder, text)
+            )
                 .then((rows) => {
                     if (
                         searchRef.current === text &&
                         current.current.revision === active.revision &&
                         current.current.accountId === active.accountId &&
-                        rows.every((row) => row.accountId === active.accountId && row.folder === active.folder)
+                        rows.every((row) => active.folder === UNIFIED || (row.accountId === active.accountId && row.folder === active.folder))
                     )
                         setMessageRows(rows);
                 })
@@ -279,20 +326,29 @@ export default function App() {
     async function selectMessage(summary: MessageSummary) {
         const request = ++messageRequest.current;
         const active = current.current;
-        if (summary.accountId !== active.accountId || summary.folder !== active.folder) return;
+        if (active.folder !== UNIFIED && (summary.accountId !== active.accountId || summary.folder !== active.folder)) return;
         try {
-            const detail = await mailApi.getMessage(active.accountId, summary.id);
+            const detail = await mailApi.getMessage(summary.accountId, summary.id);
             if (
                 messageRequest.current !== request ||
                 current.current.revision !== active.revision ||
-                detail.accountId !== active.accountId ||
-                detail.folder !== active.folder
+                detail.accountId !== summary.accountId ||
+                detail.folder !== summary.folder
             )
                 return;
             setSelected(detail);
+            setConversation([]);
+            if (detail.threadKey) {
+                void mailApi
+                    .conversation(detail.accountId, detail.threadKey)
+                    .then((items) => {
+                        if (messageRequest.current === request && current.current.revision === active.revision) setConversation(items);
+                    })
+                    .catch(() => undefined);
+            }
             if (!isRead(detail.flags) && preferences.markReadOnOpen) {
                 try {
-                    await mailApi.setMessageFlag(active.accountId, detail.folder, detail.uid, "\\Seen", true);
+                    await mailApi.setMessageFlag(detail.accountId, detail.folder, detail.uid, "\\Seen", true);
                     if (current.current.revision === active.revision) {
                         setSelected((old) => (old?.id === detail.id ? { ...old, flags: [...old.flags, "Seen"] } : old));
                         await loadCached(active.accountId, active.folder, query, active.revision);
@@ -306,9 +362,24 @@ export default function App() {
         }
     }
 
-    function compose(seed?: ComposeSeed) {
-        if (!accountRef.current) return;
-        void openComposeWindow(accountRef.current.id, seed || null).catch((cause) => setError(String(cause)));
+    function compose(seed?: ComposeSeed, fromAccountId?: string) {
+        const id = fromAccountId || accountRef.current?.id;
+        if (!id) return;
+        void openComposeWindow(id, seed || null).catch((cause) => setError(String(cause)));
+    }
+    function resumeDraft(draft: LocalDraft) {
+        setLocalDraftsOpen(false);
+        void openComposeWindow(draft.accountId, null, draft.id).catch((cause) => setError(String(cause)));
+    }
+    async function selectConversationMessage(item: MessageSummary) {
+        const request = ++messageRequest.current;
+        const revision = current.current.revision;
+        try {
+            const detail = await mailApi.getMessage(item.accountId, item.id);
+            if (request === messageRequest.current && revision === current.current.revision) setSelected(detail);
+        } catch (cause) {
+            if (revision === current.current.revision) setError(String(cause));
+        }
     }
 
     function addAccount() {
@@ -357,7 +428,7 @@ export default function App() {
         await loadCached(active.accountId, active.folder, query, active.revision);
         if (!old) return;
         try {
-            const detail = await mailApi.getMessage(active.accountId, old);
+            const detail = await mailApi.getMessage(selected?.accountId || active.accountId, old);
             if (current.current.revision === active.revision) setSelected(detail);
         } catch {
             if (current.current.revision === active.revision) setSelected(null);
@@ -405,10 +476,16 @@ export default function App() {
 
     async function messageAction(action: MessageAction, ids: number[], approved = false) {
         const active = current.current;
-        const scoped = messagesRef.current.filter((row) => ids.includes(row.id) && row.accountId === active.accountId && row.folder === active.folder);
+        const scoped = messagesRef.current.filter(
+            (row) => ids.includes(row.id) && (active.folder === UNIFIED || (row.accountId === active.accountId && row.folder === active.folder)),
+        );
         if (!scoped.length) return;
         const accountNow = accountRef.current;
-        if (!accountNow || accountNow.id !== active.accountId) return;
+        if (!accountNow || (active.folder !== UNIFIED && accountNow.id !== active.accountId)) return;
+        if ((active.folder === UNIFIED && ["spam", "archive"].includes(action)) || (active.folder === UNIFIED && action.startsWith("move:"))) {
+            setError("Open the message's account folder before moving mail. Cross-account moves are not supported.");
+            return;
+        }
         const locate = (type: string, fallback: string) =>
             folders.find((f) => f.selectable && f.attributes.some((a) => a.toLowerCase() === type.toLowerCase()))?.name ||
             folders.find((f) => f.selectable && f.name.toLowerCase().includes(fallback))?.name;
@@ -434,7 +511,7 @@ export default function App() {
             });
             if (!path) return;
             try {
-                await mailApi.saveMessage(active.accountId, scoped[0].id, path);
+                await mailApi.saveMessage(scoped[0].accountId, scoped[0].id, path);
             } catch (cause) {
                 setError(String(cause));
             }
@@ -453,11 +530,11 @@ export default function App() {
         for (const row of scoped) {
             if (current.current.revision !== active.revision) break;
             try {
-                if (action === "delete") await mailApi.deleteMessage(active.accountId, row.folder, row.uid);
-                else if (destination) await mailApi.moveMessage(active.accountId, row.folder, row.uid, destination);
+                if (action === "delete") await mailApi.deleteMessage(row.accountId, row.folder, row.uid);
+                else if (destination) await mailApi.moveMessage(row.accountId, row.folder, row.uid, destination);
                 else {
                     const flag = action === "read" || action === "unread" ? "\\Seen" : "\\Flagged";
-                    await mailApi.setMessageFlag(active.accountId, row.folder, row.uid, flag, action === "read" || action === "star");
+                    await mailApi.setMessageFlag(row.accountId, row.folder, row.uid, flag, action === "read" || action === "star");
                 }
             } catch (cause) {
                 failures.push(`${row.subject || row.uid}: ${String(cause)}`);
@@ -556,7 +633,13 @@ export default function App() {
                     accounts={accounts}
                     account={account}
                     folders={folders}
+                    favorites={favorites}
+                    unreadCounts={unreadCounts}
+                    onToggleFavorite={(name) => setFavorites(toggleFavoriteFolder(account.id, name))}
                     folder={folder}
+                    unified={folder === UNIFIED}
+                    onUnifiedInbox={activateUnified}
+                    onLocalDrafts={() => setLocalDraftsOpen(true)}
                     onAccountChange={(next) => void activateAccount(next)}
                     onManageAccounts={() => setManageOpen(true)}
                     onFolderChange={chooseFolder}
@@ -571,6 +654,8 @@ export default function App() {
                 <MessageList
                     accountId={account.id}
                     folder={folder}
+                    unified={folder === UNIFIED}
+                    accountEmails={Object.fromEntries(accounts.map((item) => [item.id, item.email]))}
                     messages={messages}
                     selectedId={selected?.id}
                     selection={selection}
@@ -583,17 +668,26 @@ export default function App() {
                     onAction={(action, ids) => void messageAction(action, ids)}
                     onSync={sync}
                     onLoadOlder={loadOlder}
-                    canLoadOlder={hasOlderMessages && syncLimit < 1000 && !query}
+                    canLoadOlder={folder !== UNIFIED && hasOlderMessages && syncLimit < 1000 && !query}
                 />
                 <MessageView
-                    account={account}
+                    account={selected ? accounts.find((item) => item.id === selected.accountId) || null : account}
                     message={selected}
-                    folders={folders}
-                    onCompose={compose}
+                    conversation={conversation}
+                    onThreadSelect={(item) => void selectConversationMessage(item)}
+                    folders={selected && selected.accountId !== account.id ? [] : folders}
+                    onCompose={(seed) => compose(seed, selected?.accountId)}
                     onChanged={refreshCurrentMessage}
                     onError={setError}
                 />
             </div>
+            <LocalDraftsDialog
+                open={localDraftsOpen}
+                accountId={account.id}
+                onOpenChange={setLocalDraftsOpen}
+                onResume={resumeDraft}
+                onError={setError}
+            />
             <CreateFolderDialog
                 open={createFolderOpen}
                 accountEmail={account.email}

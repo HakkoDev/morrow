@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.0 — Daily-driver email (source candidate)
+
+- Added a shared, account-aware Inbox view, local favorite folders and unread counts.
+- Added SQLite FTS5 search over cached message metadata and bodies with per-account filtering.
+- Added local SQLite drafts with compose autosave and recovery, and account-scoped conversation lookup.
+- Added reply threading headers and strengthened cross-account message ownership checks.
+- Licensed the project under GNU GPLv3 (`GPL-3.0-only`).
+- **Not release-verified:** Gmail/Microsoft OAuth2, native notifications and tray integration, real IMAP IDLE, remote-server draft synchronization and rich-text composing remain unfinished. Local frontend checks, Rust tests and Windows NSIS packaging pass; Linux packaging and live mail-server tests remain pending.
+
 ## v0.1.7 — CI on Node.js 24
 
 - GitHub Actions now runs on Node.js 24 with current action releases (checkout, setup-node, upload-artifact).

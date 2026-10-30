@@ -6,13 +6,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { sanitizedEmailDocument } from "@/lib/html";
 import { mailApi } from "@/lib/mail-api";
 import { updatePreferences, usePreferences } from "@/lib/preferences";
-import type { Account, Folder, MessageDetail } from "@/lib/types";
+import type { Account, Folder, MessageDetail, MessageSummary } from "@/lib/types";
 import { formatMessageDateTime, initials } from "@/lib/utils";
 import type { ComposeSeed } from "./compose-window";
 
 interface Props {
     account: Account | null;
     message: MessageDetail | null;
+    conversation?: MessageSummary[];
+    onThreadSelect?: (summary: MessageSummary) => void;
     folders: Folder[];
     onCompose: (seed: ComposeSeed) => void;
     onChanged: () => void | Promise<void>;
@@ -31,7 +33,7 @@ export function MessageView(props: Props) {
     );
 }
 
-function MessageViewContent({ account, message, folders, onCompose, onChanged, onError }: Props) {
+function MessageViewContent({ account, message, folders, onCompose, onChanged, onError, conversation = [], onThreadSelect }: Props) {
     const preferences = usePreferences();
     const [allowRemoteImages, setAllowRemoteImages] = useState(false);
     const remoteImagesEnabled = preferences.allowRemoteImages || allowRemoteImages;
@@ -142,7 +144,17 @@ function MessageViewContent({ account, message, folders, onCompose, onChanged, o
                         variant="ghost"
                         size="icon"
                         className="size-8"
-                        onClick={() => onCompose({ to: currentMessage.sender, subject: replySubject, body: quote })}
+                        onClick={() =>
+                            onCompose({
+                                to: currentMessage.sender,
+                                subject: replySubject,
+                                body: quote,
+                                inReplyTo: currentMessage.messageId,
+                                references: currentMessage.messageId
+                                    ? [currentMessage.threadKey, currentMessage.messageId].filter((id, i, ids) => id && ids.indexOf(id) === i).join(" ")
+                                    : undefined,
+                            })
+                        }
                     >
                         <Reply />
                     </Button>
@@ -150,7 +162,18 @@ function MessageViewContent({ account, message, folders, onCompose, onChanged, o
                         variant="ghost"
                         size="icon"
                         className="size-8"
-                        onClick={() => onCompose({ to: currentMessage.sender, cc: currentMessage.recipients, subject: replySubject, body: quote })}
+                        onClick={() =>
+                            onCompose({
+                                to: currentMessage.sender,
+                                cc: currentMessage.recipients,
+                                subject: replySubject,
+                                body: quote,
+                                inReplyTo: currentMessage.messageId,
+                                references: currentMessage.messageId
+                                    ? [currentMessage.threadKey, currentMessage.messageId].filter((id, i, ids) => id && ids.indexOf(id) === i).join(" ")
+                                    : undefined,
+                            })
+                        }
                     >
                         <ReplyAll />
                     </Button>
@@ -213,6 +236,24 @@ function MessageViewContent({ account, message, folders, onCompose, onChanged, o
             <ScrollArea className="min-h-0 flex-1">
                 <article className="mx-auto max-w-4xl p-7">
                     <h1 className="text-xl font-semibold leading-tight tracking-tight">{currentMessage.subject || "(no subject)"}</h1>
+                    {conversation.length > 1 && (
+                        <fieldset
+                            className="mt-3 flex flex-wrap gap-1.5"
+                            aria-label="Conversation messages"
+                        >
+                            {conversation.map((item, index) => (
+                                <button
+                                    key={item.id}
+                                    type="button"
+                                    onClick={() => onThreadSelect?.(item)}
+                                    aria-current={item.id === currentMessage.id ? "true" : undefined}
+                                    className={`cursor-pointer rounded-md border px-2 py-1 text-[11px] transition hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring ${item.id === currentMessage.id ? "border-primary bg-primary/10" : "border-border"}`}
+                                >
+                                    {index + 1}. {item.sender.split("<")[0].trim() || "Message"}
+                                </button>
+                            ))}
+                        </fieldset>
+                    )}
                     <div className="mt-5 flex items-start gap-3">
                         <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold">
                             {initials(currentMessage.sender)}

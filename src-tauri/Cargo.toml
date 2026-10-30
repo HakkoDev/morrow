@@ -1,8 +1,9 @@
 [package]
 name = "morrow-mail"
-version = "0.1.7"
+version = "0.2.0"
 description = "Morrow, a desktop IMAP/SMTP mail client built with Rust, Tauri, React, and shadcn/ui"
 authors = ["Morrow Contributors"]
+license = "GPL-3.0-only"
 edition = "2021"
 
 [lib]

@@ -178,7 +178,8 @@ pub fn list_messages(state: State<'_, AppState>, account_id: String, folder: Str
 }
 
 #[tauri::command]
-pub fn unread_counts(state: State<'_, AppState>) -> Result<std::collections::HashMap<String, usize>, String> {
+pub fn unread_counts(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<std::collections::HashMap<String, usize>, String> {
+    crate::update_unread_indicators(&state.db, &app);
     state.db.unread_counts()
 }
 

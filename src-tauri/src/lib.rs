@@ -59,6 +59,7 @@ pub fn run() {
                 tray = tray.icon(icon.clone());
             }
             let _ = tray.build(app)?;
+            update_unread_indicators(&db, app.handle());
 
             // Keep one account-scoped IDLE watcher per saved account. An
             // unsupported or broken IDLE server falls back to the independent
@@ -253,11 +254,41 @@ async fn sync_inbox_and_emit(db: &Database, app: &tauri::AppHandle, account: &mo
         if count > 0 && synced > 0 {
             let _ = app.emit("mail:new", serde_json::json!({"accountId": account.id, "count": count.min(100)}));
         }
-        if let Some(tray) = app.tray_by_id("morrow-tray") {
-            if let Ok(counts) = db.unread_counts() {
-                let count: usize = counts.values().sum();
-                let _ = tray.set_tooltip(Some(format!("Morrow · {count} unread")));
-            }
+        update_unread_indicators(db, app);
+    }
+}
+
+/// Display aggregate unread mail without showing message content. Badges are
+/// updated from the same cached SQLite counts used by the mailbox UI.
+pub(crate) fn update_unread_indicators(db: &Database, app: &tauri::AppHandle) {
+    let Ok(counts) = db.unread_counts() else { return };
+    let count: usize = counts.values().sum();
+    if let Some(tray) = app.tray_by_id("morrow-tray") {
+        let _ = tray.set_tooltip(Some(format!("Morrow Â· {count} unread")));
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        #[cfg(target_os = "windows")]
+        {
+            // Windows does not implement set_badge_count. The overlay API
+            // supports a compact 1..9 / 9+ count instead.
+            let icon = match count.min(10) {
+                1 => Some(tauri::include_image!("icons/unread-1.png")),
+                2 => Some(tauri::include_image!("icons/unread-2.png")),
+                3 => Some(tauri::include_image!("icons/unread-3.png")),
+                4 => Some(tauri::include_image!("icons/unread-4.png")),
+                5 => Some(tauri::include_image!("icons/unread-5.png")),
+                6 => Some(tauri::include_image!("icons/unread-6.png")),
+                7 => Some(tauri::include_image!("icons/unread-7.png")),
+                8 => Some(tauri::include_image!("icons/unread-8.png")),
+                9 => Some(tauri::include_image!("icons/unread-9.png")),
+                10 => Some(tauri::include_image!("icons/unread-10.png")),
+                _ => None,
+            };
+            let _ = window.set_overlay_icon(icon);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = window.set_badge_count(if count == 0 { None } else { Some(count as i64) });
         }
     }
 }

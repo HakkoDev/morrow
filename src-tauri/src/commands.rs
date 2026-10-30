@@ -1,6 +1,7 @@
-use std::{fs, path::Path, time::Duration};
+use std::{collections::HashMap, fs, path::Path, time::Duration};
 
-use tauri::State;
+use tauri::{AppHandle, State};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
@@ -8,12 +9,13 @@ use crate::{
     db::Database,
     imap, mime,
     models::{Account, AccountInput, ConnectionTestResult, FolderInfo, LocalDraft, MessageDetail, MessageSummary, SendMessageInput},
-    smtp,
+    oauth, smtp,
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Database,
+    pub pending_oauth: std::sync::Arc<Mutex<HashMap<String, oauth::PendingAuth>>>,
 }
 
 #[tauri::command]
@@ -22,25 +24,64 @@ pub fn list_accounts(state: State<'_, AppState>) -> Result<Vec<Account>, String>
 }
 
 #[tauri::command]
+pub async fn authorize_oauth(app: AppHandle, state: State<'_, AppState>, account: Account) -> Result<String, String> {
+    validate_account(&account)?;
+    if account.auth_method == "password" {
+        return Err("Choose an OAuth provider first".into());
+    }
+    let authorized = oauth::authorize(&app, &account).await?;
+    let ticket = Uuid::new_v4().to_string();
+    let mut pending = state.pending_oauth.lock().await;
+    // Avoid retaining abandoned refresh tokens in application memory indefinitely.
+    pending.clear();
+    pending.insert(ticket.clone(), authorized);
+    Ok(ticket)
+}
+
+async fn candidate_token(state: &AppState, input: &AccountInput, imap: bool) -> Result<String, String> {
+    if input.account.auth_method == "password" {
+        let supplied = if imap {
+            input.imap_password.as_deref()
+        } else {
+            input
+                .smtp_password
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .or(if input.account.id.is_empty() { input.imap_password.as_deref() } else { None })
+        };
+        return password_for_test(&input.account.id, supplied, imap);
+    }
+    oauth::validate_oauth_account(&input.account)?;
+    if let Some(ticket) = &input.oauth_ticket {
+        let pending = state.pending_oauth.lock().await;
+        let value = pending.get(ticket).ok_or("OAuth sign-in expired. Please authorize again.")?;
+        oauth::validate_pending(value, &input.account)?;
+        Ok(value.stored.access_token.clone())
+    } else if input.account.id.is_empty() {
+        Err("Authorize with your provider before saving this account".into())
+    } else {
+        let existing = state.db.get_account(&input.account.id)?;
+        if existing.auth_method != input.account.auth_method
+            || existing.oauth_client_id != input.account.oauth_client_id
+            || existing.email != input.account.email
+        {
+            return Err("Account or OAuth application changed. Reauthorize this account first.".into());
+        }
+        oauth::token_for(&existing).await
+    }
+}
+
+#[tauri::command]
 pub async fn save_account(state: State<'_, AppState>, mut input: AccountInput) -> Result<Account, String> {
     validate_account(&input.account)?;
     let is_new = input.account.id.trim().is_empty();
-    // Important: authenticate with both servers BEFORE storing the account or
-    // credentials. Failed Gmail/IMAP passwords must never create a ghost account.
-    let imap_password = password_for_test(&input.account.id, input.imap_password.as_deref(), true)?;
-    let smtp_password = password_for_test(
-        &input.account.id,
-        input
-            .smtp_password
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .or(if is_new { input.imap_password.as_deref() } else { None }),
-        false,
-    )?;
-    tokio::time::timeout(Duration::from_secs(35), imap::test(&input.account, &imap_password))
+    // Validate both protocols before changing the on-disk account or keychain.
+    let imap_secret = candidate_token(&state, &input, true).await?;
+    let smtp_secret = candidate_token(&state, &input, false).await?;
+    tokio::time::timeout(Duration::from_secs(35), imap::test(&input.account, &imap_secret))
         .await
         .map_err(|_| "IMAP connection test timed out. Account not saved.".to_string())??;
-    tokio::time::timeout(Duration::from_secs(35), smtp::test(&input.account, &smtp_password))
+    tokio::time::timeout(Duration::from_secs(35), smtp::test(&input.account, &smtp_secret))
         .await
         .map_err(|_| "SMTP connection test timed out. Account not saved.".to_string())??;
 
@@ -48,20 +89,33 @@ pub async fn save_account(state: State<'_, AppState>, mut input: AccountInput) -
         input.account.id = Uuid::new_v4().to_string();
     }
     let id = input.account.id.clone();
-    // DB errors must not leave valid-looking new accounts in the UI.
-    // A new keychain entry is removed if writing the account fails.
-    credentials::set_imap_password(&id, &imap_password)?;
-    if let Err(error) = credentials::set_smtp_password(&id, &smtp_password) {
-        if is_new {
-            credentials::delete_credentials(&id);
+    if input.account.auth_method == "password" {
+        credentials::set_imap_password(&id, &imap_secret)?;
+        if let Err(error) = credentials::set_smtp_password(&id, &smtp_secret) {
+            if is_new {
+                credentials::delete_credentials(&id);
+            }
+            return Err(error);
         }
-        return Err(error);
+    } else if let Some(ticket) = &input.oauth_ticket {
+        let pending = state.pending_oauth.lock().await;
+        let authorized = pending.get(ticket).ok_or("Authorization expired. Sign in again.")?;
+        oauth::validate_pending(authorized, &input.account)?;
+        oauth::save_tokens(&id, &authorized.stored)?;
     }
     if let Err(error) = state.db.save_account(&input.account) {
         if is_new {
             credentials::delete_credentials(&id);
         }
         return Err(error);
+    }
+    if input.account.auth_method == "password" {
+        oauth::delete_tokens(&id);
+    } else {
+        credentials::delete_passwords(&id);
+    }
+    if let Some(ticket) = &input.oauth_ticket {
+        state.pending_oauth.lock().await.remove(ticket);
     }
     Ok(input.account)
 }
@@ -74,14 +128,14 @@ pub fn delete_account(state: State<'_, AppState>, account_id: String) -> Result<
 }
 
 #[tauri::command]
-pub async fn test_account(input: AccountInput) -> Result<ConnectionTestResult, String> {
+pub async fn test_account(state: State<'_, AppState>, input: AccountInput) -> Result<ConnectionTestResult, String> {
     validate_account(&input.account)?;
-    let imap_password = password_for_test(&input.account.id, input.imap_password.as_deref(), true)?;
-    let smtp_password = password_for_test(&input.account.id, input.smtp_password.as_deref().or(input.imap_password.as_deref()), false)?;
-    tokio::time::timeout(Duration::from_secs(35), imap::test(&input.account, &imap_password))
+    let imap_secret = candidate_token(&state, &input, true).await?;
+    let smtp_secret = candidate_token(&state, &input, false).await?;
+    tokio::time::timeout(Duration::from_secs(35), imap::test(&input.account, &imap_secret))
         .await
         .map_err(|_| "IMAP connection test timed out".to_string())??;
-    tokio::time::timeout(Duration::from_secs(35), smtp::test(&input.account, &smtp_password))
+    tokio::time::timeout(Duration::from_secs(35), smtp::test(&input.account, &smtp_secret))
         .await
         .map_err(|_| "SMTP connection test timed out".to_string())??;
     Ok(ConnectionTestResult { imap: true, smtp: true })
@@ -90,7 +144,7 @@ pub async fn test_account(input: AccountInput) -> Result<ConnectionTestResult, S
 #[tauri::command]
 pub async fn list_folders(state: State<'_, AppState>, account_id: String) -> Result<Vec<FolderInfo>, String> {
     let account = state.db.get_account(&account_id)?;
-    let password = credentials::get_imap_password(&account_id)?;
+    let password = oauth::secret(&account, true).await?;
     let folders = tokio::time::timeout(Duration::from_secs(45), imap::list_folders(&account, &password))
         .await
         .map_err(|_| "IMAP folder discovery timed out".to_string())??;
@@ -110,7 +164,7 @@ pub async fn create_folder(state: State<'_, AppState>, account_id: String, name:
         return Err("Enter a valid folder name (not INBOX).".into());
     }
     let account = state.db.get_account(&account_id)?;
-    let password = credentials::get_imap_password(&account_id)?;
+    let password = oauth::secret(&account, true).await?;
     tokio::time::timeout(Duration::from_secs(45), imap::create_folder(&account, &password, name))
         .await
         .map_err(|_| "Folder creation timed out; refresh folders before retrying".to_string())??;
@@ -139,7 +193,7 @@ pub async fn remove_folder(state: State<'_, AppState>, account_id: String, name:
     if !folders.iter().any(|item| item.name == name && item.selectable) {
         return Err("Folder not found in the cached listing. Refresh folders first.".into());
     }
-    let password = credentials::get_imap_password(&account_id)?;
+    let password = oauth::secret(&account, true).await?;
     tokio::time::timeout(Duration::from_secs(45), imap::remove_folder(&account, &password, name))
         .await
         .map_err(|_| "Folder deletion timed out; refresh folders before retrying".to_string())??;
@@ -166,7 +220,7 @@ pub fn save_message(state: State<'_, AppState>, account_id: String, message_id: 
 #[tauri::command]
 pub async fn sync_folder(state: State<'_, AppState>, account_id: String, folder: String, limit: u32) -> Result<usize, String> {
     let account = state.db.get_account(&account_id)?;
-    let password = credentials::get_imap_password(&account_id)?;
+    let password = oauth::secret(&account, true).await?;
     tokio::time::timeout(Duration::from_secs(120), imap::sync_folder(&state.db, &account, &password, &folder, limit))
         .await
         .map_err(|_| "IMAP folder synchronization timed out".to_string())?
@@ -227,7 +281,7 @@ pub fn get_message(state: State<'_, AppState>, account_id: String, message_id: i
 #[tauri::command]
 pub async fn set_message_flag(state: State<'_, AppState>, account_id: String, folder: String, uid: u32, flag: String, enabled: bool) -> Result<(), String> {
     let account = state.db.get_account(&account_id)?;
-    let password = credentials::get_imap_password(&account_id)?;
+    let password = oauth::secret(&account, true).await?;
     let normalized = flag.trim_start_matches('\\');
     if !matches!(normalized, "Seen" | "Flagged" | "Answered" | "Draft") {
         return Err("Unsupported message flag".into());
@@ -253,7 +307,7 @@ pub async fn set_message_flag(state: State<'_, AppState>, account_id: String, fo
 #[tauri::command]
 pub async fn move_message(state: State<'_, AppState>, account_id: String, folder: String, uid: u32, destination: String) -> Result<(), String> {
     let account = state.db.get_account(&account_id)?;
-    let password = credentials::get_imap_password(&account_id)?;
+    let password = oauth::secret(&account, true).await?;
     tokio::time::timeout(Duration::from_secs(50), imap::move_message(&account, &password, &folder, uid, &destination))
         .await
         .map_err(|_| "IMAP move timed out; check the destination before retrying".to_string())??;
@@ -264,7 +318,7 @@ pub async fn move_message(state: State<'_, AppState>, account_id: String, folder
 #[tauri::command]
 pub async fn delete_message(state: State<'_, AppState>, account_id: String, folder: String, uid: u32) -> Result<(), String> {
     let account = state.db.get_account(&account_id)?;
-    let password = credentials::get_imap_password(&account_id)?;
+    let password = oauth::secret(&account, true).await?;
     // Resolve the Trash destination *before* moving. Retrying a failed MOVE
     // against another folder can duplicate mail when the first move succeeded
     // on the server but its network response was lost.
@@ -297,7 +351,7 @@ pub async fn delete_message(state: State<'_, AppState>, account_id: String, fold
 #[tauri::command]
 pub async fn send_message(state: State<'_, AppState>, input: SendMessageInput) -> Result<(), String> {
     let account = state.db.get_account(&input.account_id)?;
-    let smtp_password = credentials::get_smtp_password(&input.account_id)?;
+    let smtp_password = oauth::secret(&account, false).await?;
     let raw = tokio::time::timeout(Duration::from_secs(90), smtp::send(&account, &smtp_password, &input))
         .await
         .map_err(|_| "SMTP send timed out; delivery status is unknown. Check Sent before retrying to avoid duplicates.".to_string())??;
@@ -305,7 +359,7 @@ pub async fn send_message(state: State<'_, AppState>, input: SendMessageInput) -
     // SMTP has already accepted the message. A Sent-folder archive failure must never
     // make the caller retry the SMTP send and accidentally deliver a duplicate.
     if account.save_sent_copy {
-        if let Ok(imap_password) = credentials::get_imap_password(&input.account_id) {
+        if let Ok(imap_password) = oauth::secret(&account, true).await {
             let primary = imap::append(&account, &imap_password, &account.sent_folder, &raw, Some("(\\Seen)")).await;
 
             if primary.is_err() {
@@ -344,6 +398,7 @@ fn validate_account(account: &Account) -> Result<(), String> {
     if account.imap_username.trim().is_empty() || account.smtp_username.trim().is_empty() {
         return Err("IMAP and SMTP usernames are required".into());
     }
+    oauth::validate_oauth_account(account)?;
     Ok(())
 }
 

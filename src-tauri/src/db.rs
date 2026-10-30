@@ -33,7 +33,7 @@ impl Database {
         let schema_version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        if schema_version > 4 {
+        if schema_version > 5 {
             return Err(format!(
                 "Mail cache schema version {schema_version} is newer than this Morrow build supports (4). Use a newer build to avoid corrupting your data."
             ));
@@ -59,7 +59,9 @@ impl Database {
                 sent_folder TEXT NOT NULL DEFAULT 'Sent',
                 drafts_folder TEXT NOT NULL DEFAULT 'Drafts',
                 trash_folder TEXT NOT NULL DEFAULT 'Trash',
-                save_sent_copy INTEGER NOT NULL DEFAULT 1
+                save_sent_copy INTEGER NOT NULL DEFAULT 1,
+                auth_method TEXT NOT NULL DEFAULT 'password',
+                oauth_client_id TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -189,6 +191,21 @@ impl Database {
                     .map_err(|e| e.to_string())?;
             }
         }
+        if schema_version < 5 {
+            let mut stmt = connection.prepare("PRAGMA table_info(accounts)").map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(1)).map_err(|e| e.to_string())?;
+            let names = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+            if !names.iter().any(|n| n == "auth_method") {
+                connection
+                    .execute("ALTER TABLE accounts ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'password'", [])
+                    .map_err(|e| e.to_string())?;
+            }
+            if !names.iter().any(|n| n == "oauth_client_id") {
+                connection
+                    .execute("ALTER TABLE accounts ADD COLUMN oauth_client_id TEXT NOT NULL DEFAULT ''", [])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         connection
             .execute_batch(
                 r#"
@@ -215,7 +232,7 @@ impl Database {
                 .execute("INSERT INTO message_fts(message_fts) VALUES('rebuild')", [])
                 .map_err(|e| e.to_string())?;
         }
-        connection.pragma_update(None, "user_version", 4).map_err(|e| e.to_string())?;
+        connection.pragma_update(None, "user_version", 5).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -253,7 +270,7 @@ impl Database {
     pub fn list_accounts(&self) -> Result<Vec<Account>, String> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
-            "SELECT id, display_name, email, imap_host, imap_port, imap_security, imap_username, smtp_host, smtp_port, smtp_security, smtp_username, sent_folder, drafts_folder, trash_folder, save_sent_copy FROM accounts ORDER BY rowid"
+            "SELECT id, display_name, email, imap_host, imap_port, imap_security, imap_username, smtp_host, smtp_port, smtp_security, smtp_username, sent_folder, drafts_folder, trash_folder, save_sent_copy, auth_method, oauth_client_id FROM accounts ORDER BY rowid"
         ).map_err(|e| e.to_string())?;
         let rows = statement.query_map([], |row| Ok(account_from_row(row))).map_err(|e| e.to_string())?;
         rows.map(|row| row.map_err(|e| e.to_string())).collect()
@@ -262,7 +279,7 @@ impl Database {
     pub fn get_account(&self, id: &str) -> Result<Account, String> {
         let connection = self.connection()?;
         connection.query_row(
-            "SELECT id, display_name, email, imap_host, imap_port, imap_security, imap_username, smtp_host, smtp_port, smtp_security, smtp_username, sent_folder, drafts_folder, trash_folder, save_sent_copy FROM accounts WHERE id = ?1",
+            "SELECT id, display_name, email, imap_host, imap_port, imap_security, imap_username, smtp_host, smtp_port, smtp_security, smtp_username, sent_folder, drafts_folder, trash_folder, save_sent_copy, auth_method, oauth_client_id FROM accounts WHERE id = ?1",
             [id],
             |row| Ok(account_from_row(row)),
         ).map_err(|e| e.to_string())
@@ -274,8 +291,8 @@ impl Database {
             .execute(
                 r#"INSERT INTO accounts (
                 id, display_name, email, imap_host, imap_port, imap_security, imap_username,
-                smtp_host, smtp_port, smtp_security, smtp_username, sent_folder, drafts_folder, trash_folder, save_sent_copy
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                smtp_host, smtp_port, smtp_security, smtp_username, sent_folder, drafts_folder, trash_folder, save_sent_copy, auth_method, oauth_client_id
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
             ON CONFLICT(id) DO UPDATE SET
                 display_name=excluded.display_name,
                 email=excluded.email,
@@ -290,7 +307,9 @@ impl Database {
                 sent_folder=excluded.sent_folder,
                 drafts_folder=excluded.drafts_folder,
                 trash_folder=excluded.trash_folder,
-                save_sent_copy=excluded.save_sent_copy"#,
+                save_sent_copy=excluded.save_sent_copy,
+                auth_method=excluded.auth_method,
+                oauth_client_id=excluded.oauth_client_id"#,
                 params![
                     account.id,
                     account.display_name,
@@ -306,7 +325,9 @@ impl Database {
                     account.sent_folder,
                     account.drafts_folder,
                     account.trash_folder,
-                    account.save_sent_copy as i64
+                    account.save_sent_copy as i64,
+                    account.auth_method,
+                    account.oauth_client_id
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -741,6 +762,8 @@ fn account_from_row(row: &rusqlite::Row<'_>) -> Account {
         drafts_folder: row.get(12).unwrap_or_else(|_| "Drafts".into()),
         trash_folder: row.get(13).unwrap_or_else(|_| "Trash".into()),
         save_sent_copy: row.get::<_, i64>(14).unwrap_or(1) != 0,
+        auth_method: row.get(15).unwrap_or_else(|_| "password".into()),
+        oauth_client_id: row.get(16).unwrap_or_default(),
     }
 }
 
@@ -819,6 +842,8 @@ mod tests {
                     drafts_folder: "Drafts".into(),
                     trash_folder: "Trash".into(),
                     save_sent_copy: true,
+                    auth_method: "password".into(),
+                    oauth_client_id: String::new(),
                 })
                 .unwrap();
         }

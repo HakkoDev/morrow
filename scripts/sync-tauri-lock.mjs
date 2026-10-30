@@ -41,6 +41,23 @@ export function mismatches(lockedContents, required) {
         .map(([name, version]) => ({ name, expected: version, actual: lockedCargoVersion(lockedContents, name) }));
 }
 
+export function missingDirectDependencies(manifestContents, lockContents) {
+    const section = manifestContents.match(/^\[dependencies\]\s*\n([\s\S]*?)(?=^\[|$(?![\s\S]))/m)?.[1] ?? "";
+    const names = [...section.matchAll(/^([A-Za-z0-9_-]+)\s*=/gm)].map((match) => match[1]);
+    const root = lockContents.split(/(?=^\[\[package\]\])/m).find((part) => /^name\s*=\s*"morrow-mail"$/m.test(part)) ?? "";
+    const dependencies = root.match(/^dependencies\s*=\s*\[([\s\S]*?)\]/m)?.[1] ?? "";
+    return names.filter(
+        (name) =>
+            !dependencies.split("\n").some(
+                (line) =>
+                    line
+                        .trim()
+                        .match(/^"([^"]+)"/)?.[1]
+                        ?.split(" ")[0] === name,
+            ),
+    );
+}
+
 function cargo(...args) {
     const result = spawnSync("cargo", [...args, "--manifest-path", manifest], { cwd: projectRoot, stdio: "inherit", shell: false });
     if (result.error) throw new Error(`Could not execute cargo: ${result.error.message}. Install the Rust toolchain first.`);
@@ -52,23 +69,27 @@ function run() {
     const required = requiredTauriVersions(readFileSync(manifest, "utf8"));
     const lock = existsSync(lockfile) ? readFileSync(lockfile, "utf8") : "";
     const missing = mismatches(lock, required);
-    if (!missing.length) {
+    const directMissing = missingDirectDependencies(readFileSync(manifest, "utf8"), lock);
+    if (!missing.length && !directMissing.length) {
         console.log(`Cargo.lock is aligned: tauri ${required.tauri}, tauri-build ${required["tauri-build"]}.`);
         return;
     }
     for (const { name, expected, actual } of missing) {
         console.error(`Cargo.lock: ${name} is ${actual ?? "missing"}, requires ${expected}.`);
     }
+    if (directMissing.length) console.error(`Cargo.lock missing manifest dependencies: ${directMissing.join(", ")}`);
     if (!sync) {
         console.error("Run: bun run deps:sync (then commit the updated bun.lock and src-tauri/Cargo.lock)");
         process.exitCode = 1;
         return;
     }
-    if (!lock) cargo("generate-lockfile");
+    if (!lock || directMissing.length) cargo("generate-lockfile");
     else for (const { name, expected } of missing) cargo("update", "-p", name, "--precise", expected);
     const updated = readFileSync(lockfile, "utf8");
     const remaining = mismatches(updated, required);
     if (remaining.length) throw new Error(`Cargo dependency resolution is still mismatched: ${JSON.stringify(remaining)}`);
+    const stillMissing = missingDirectDependencies(readFileSync(manifest, "utf8"), updated);
+    if (stillMissing.length) throw new Error(`Cargo.lock is still missing ${stillMissing.join(", ")}`);
     console.log(`Cargo.lock refreshed: tauri ${required.tauri}, tauri-build ${required["tauri-build"]}.`);
 }
 

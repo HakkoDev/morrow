@@ -26,6 +26,14 @@ pub struct Account {
     pub drafts_folder: String,
     pub trash_folder: String,
     pub save_sent_copy: bool,
+    #[serde(default = "default_auth_method")]
+    pub auth_method: String,
+    #[serde(default)]
+    pub oauth_client_id: String,
+}
+
+fn default_auth_method() -> String {
+    "password".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +45,8 @@ pub struct AccountInput {
     pub imap_password: Option<String>,
     #[serde(default)]
     pub smtp_password: Option<String>,
+    #[serde(default)]
+    pub oauth_ticket: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

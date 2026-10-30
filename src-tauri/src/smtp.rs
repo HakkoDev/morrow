@@ -2,7 +2,7 @@ use std::{path::Path, time::Duration};
 
 use lettre::{
     message::{header::ContentType, Attachment, Mailbox, Message, MultiPart, SinglePart},
-    transport::smtp::authentication::Credentials,
+    transport::smtp::authentication::{Credentials, Mechanism},
     AsyncSmtpTransport, AsyncTransport, Tokio1Executor,
 };
 use mailparse::{addrparse, MailAddr, SingleInfo};
@@ -37,7 +37,13 @@ fn transport(account: &Account, password: &str) -> Result<AsyncSmtpTransport<Tok
             .port(account.smtp_port),
         SecurityMode::Plain => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&account.smtp_host).port(account.smtp_port),
     };
-    Ok(builder.credentials(credentials).timeout(Some(Duration::from_secs(30))).build())
+    let builder = builder.credentials(credentials).timeout(Some(Duration::from_secs(30)));
+    let builder = if account.auth_method == "password" {
+        builder
+    } else {
+        builder.authentication(vec![Mechanism::Xoauth2])
+    };
+    Ok(builder.build())
 }
 
 async fn build_message(account: &Account, input: &SendMessageInput) -> Result<Message, String> {
@@ -152,6 +158,8 @@ mod reply_tests {
     #[tokio::test]
     async fn rich_mail_contains_decodable_plain_and_html_alternatives_with_attachments() {
         let account = Account {
+            auth_method: "password".into(),
+            oauth_client_id: String::new(),
             id: "a".into(),
             display_name: "Alice".into(),
             email: "a@example.org".into(),

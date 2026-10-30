@@ -21,6 +21,24 @@ pub trait MailStream: AsyncRead + AsyncWrite + Unpin + Send + Debug {}
 impl<T> MailStream for T where T: AsyncRead + AsyncWrite + Unpin + Send + Debug {}
 type DynStream = Pin<Box<dyn MailStream>>;
 
+struct XOAuth2 {
+    username: String,
+    token: String,
+    responded: bool,
+}
+impl async_imap::Authenticator for XOAuth2 {
+    type Response = String;
+    fn process(&mut self, _: &[u8]) -> Self::Response {
+        // RFC 7628: after an OAuth error challenge, respond with an empty
+        // payload rather than repeatedly disclosing the same bearer token.
+        if self.responded {
+            return String::new();
+        }
+        self.responded = true;
+        format!("user={}\x01auth=Bearer {}\x01\x01", self.username, self.token)
+    }
+}
+
 pub async fn connect(account: &Account, password: &str) -> Result<Session<DynStream>, String> {
     // Without a connection deadline a dead endpoint can block manual account setup forever.
     let tcp = tokio::time::timeout(Duration::from_secs(15), TcpStream::connect((account.imap_host.as_str(), account.imap_port)))
@@ -65,10 +83,24 @@ pub async fn connect(account: &Account, password: &str) -> Result<Session<DynStr
             .ok_or_else(|| "IMAP server closed before greeting".to_string())?;
     }
 
-    client
-        .login(&account.imap_username, password)
-        .await
-        .map_err(|(e, _)| format!("IMAP authentication failed: {e}"))
+    if account.auth_method == "password" {
+        client
+            .login(&account.imap_username, password)
+            .await
+            .map_err(|(e, _)| format!("IMAP authentication failed: {e}"))
+    } else {
+        client
+            .authenticate(
+                "XOAUTH2",
+                XOAuth2 {
+                    username: account.imap_username.clone(),
+                    token: password.to_owned(),
+                    responded: false,
+                },
+            )
+            .await
+            .map_err(|(e, _)| format!("IMAP OAuth2 authentication failed: {e}"))
+    }
 }
 
 /// Wait for a server-side INBOX change. This is one bounded IDLE cycle on a
@@ -427,6 +459,8 @@ mod idle_tests {
             }
         });
         let account = Account {
+            auth_method: "password".into(),
+            oauth_client_id: String::new(),
             id: "test".into(),
             display_name: "Test".into(),
             email: "test@example.org".into(),

@@ -16,11 +16,14 @@ export interface Account {
     draftsFolder: string;
     trashFolder: string;
     saveSentCopy: boolean;
+    authMethod: "password" | "google" | "microsoft";
+    oauthClientId: string;
 }
 
 export interface AccountInput extends Account {
     imapPassword?: string;
     smtpPassword?: string;
+    oauthTicket?: string;
 }
 
 export interface Folder {

@@ -26,6 +26,15 @@ pub fn get_smtp_password(account_id: &str) -> Result<String, String> {
         .map_err(|e| format!("No SMTP credential is stored for this account: {e}"))
 }
 
+pub fn delete_passwords(account_id: &str) {
+    if let Ok(item) = entry(account_id, "imap") {
+        let _ = item.delete_credential();
+    }
+    if let Ok(item) = entry(account_id, "smtp") {
+        let _ = item.delete_credential();
+    }
+}
+
 pub fn delete_credentials(account_id: &str) {
     if let Ok(item) = entry(account_id, "imap") {
         let _ = item.delete_credential();
@@ -33,4 +42,5 @@ pub fn delete_credentials(account_id: &str) {
     if let Ok(item) = entry(account_id, "smtp") {
         let _ = item.delete_credential();
     }
+    crate::oauth::delete_tokens(account_id);
 }

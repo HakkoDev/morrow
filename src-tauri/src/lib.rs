@@ -4,6 +4,7 @@ mod db;
 mod imap;
 mod mime;
 mod models;
+mod oauth;
 mod smtp;
 
 use commands::AppState;
@@ -31,10 +32,14 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let db = Database::new(&app_data_dir).map_err(std::io::Error::other)?;
-            app.manage(AppState { db: db.clone() });
+            app.manage(AppState {
+                db: db.clone(),
+                pending_oauth: Arc::new(Mutex::new(HashMap::new())),
+            });
 
             // The tray is an explicit Show/Quit control; closing the window
             // still exits normally, so there is no invisible background app.
@@ -92,7 +97,7 @@ pub fn run() {
                         let task = tauri::async_runtime::spawn(async move {
                             let mut backoff = 15u64;
                             while let Ok(current) = db.get_account(&id) {
-                                let Ok(secret) = credentials::get_imap_password(&id) else { break };
+                                let Ok(secret) = oauth::secret(&current, true).await else { break };
                                 match imap::idle_inbox_once(&current, &secret).await {
                                     Ok(changed) => {
                                         backoff = 15;
@@ -130,7 +135,7 @@ pub fn run() {
                     let account_db = preload_db.clone();
                     let account_app = preload_app.clone();
                     tauri::async_runtime::spawn(async move {
-                        let Ok(password) = credentials::get_imap_password(&account.id) else { return };
+                        let Ok(password) = oauth::secret(&account, true).await else { return };
                         let folders = match tokio::time::timeout(Duration::from_secs(40), imap::list_folders(&account, &password)).await {
                             Ok(Ok(folders)) => folders,
                             _ => return,
@@ -147,6 +152,31 @@ pub fn run() {
                             }
                         }
                     });
+                }
+            });
+
+            // Draft synchronization runs outside webviews, including when
+            // compose windows are closed. Offline and OAuth failures are
+            // non-destructive; editors currently open are never overwritten.
+            let draft_db = db.clone();
+            let draft_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(180));
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                loop {
+                    ticker.tick().await;
+                    let Ok(accounts) = draft_db.list_accounts() else { continue };
+                    for account in accounts {
+                        let account_db = draft_db.clone();
+                        let handle = draft_app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let Ok(secret) = oauth::secret(&account, true).await else { return };
+                            let result = tokio::time::timeout(Duration::from_secs(170), draft_sync::reconcile(&account_db, &account, &secret)).await;
+                            if let Ok(Ok(_)) = result {
+                                let _ = handle.emit("mail:drafts-updated", serde_json::json!({"accountId": account.id}));
+                            }
+                        });
+                    }
                 }
             });
 
@@ -172,7 +202,7 @@ pub fn run() {
                         let db = db.clone();
                         let app_handle = app_handle.clone();
                         async move {
-                            let password = match credentials::get_imap_password(&account.id) {
+                            let password = match oauth::secret(&account, true).await {
                                 Ok(password) => password,
                                 Err(_) => return,
                             };
@@ -191,6 +221,7 @@ pub fn run() {
             updater_configuration,
             commands::list_accounts,
             commands::save_account,
+            commands::authorize_oauth,
             commands::delete_account,
             commands::test_account,
             commands::list_folders,

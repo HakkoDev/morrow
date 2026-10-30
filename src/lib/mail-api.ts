@@ -3,6 +3,7 @@ import type { Account, AccountInput, ConnectionTestResult, Folder, LocalDraft, M
 
 export const mailApi = {
     listAccounts: () => invoke<Account[]>("list_accounts"),
+    authorizeOAuth: (account: Account) => invoke<string>("authorize_oauth", { account }),
     saveAccount: (input: AccountInput) => invoke<Account>("save_account", { input }),
     deleteAccount: (accountId: string) => invoke<void>("delete_account", { accountId }),
     testAccount: (input: AccountInput) => invoke<ConnectionTestResult>("test_account", { input }),

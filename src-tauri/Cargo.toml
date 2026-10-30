@@ -32,6 +32,14 @@ futures = "0.3"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-native-tls", "hostname", "pool"] }
 mailparse = "0.16"
 mime_guess = "2"
+ammonia = "4"
+base64 = "0.22"
+infer = "0.22"
+# OAuth2 PKCE, HTTPS token exchange, and system-browser authorization.
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+sha2 = "0.10"
+url = "2.5"
+tauri-plugin-opener = "2.5.5"
 
 [profile.release]
 strip = true

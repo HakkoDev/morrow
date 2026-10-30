@@ -5,12 +5,15 @@ import { lockedCargoVersion, mismatches, requiredTauriVersions } from "./sync-ta
 
 const manifest = readFileSync(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const config = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(manifest)?.[1];
 const cargoLock = `version = 4\n\n[[package]]\nname = "tauri"\nversion = "2.11.5"\n\n[[package]]\nname = "tauri-build"\nversion = "2.6.3"\n`;
 
 test("Tauri manifest pins match the JavaScript core API without changing the app version", () => {
     const versions = requiredTauriVersions(manifest);
     assert.equal(versions.tauri, pkg.dependencies["@tauri-apps/api"]);
-    assert.equal(pkg.version, "0.1.5");
+    assert.equal(pkg.version, config.version);
+    assert.equal(pkg.version, cargoVersion);
 });
 
 test("detect stale Cargo.lock instead of trusting the manifest alone", () => {

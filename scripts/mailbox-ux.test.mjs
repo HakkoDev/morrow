@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
-import ts from "typescript";
+import { transpileTs } from "./typescript-transpile.mjs";
 
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 function evaluateTs(file) {
-    const compiled = ts.transpileModule(read(file), { compilerOptions: { module: ts.ModuleKind.CommonJS } });
     const module = { exports: {} };
-    vm.runInNewContext(compiled.outputText, {
+    vm.runInNewContext(transpileTs(file), {
         module,
         exports: module.exports,
         require: (name) => {

@@ -1,18 +1,12 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
-import ts from "typescript";
+import { transpileTs } from "./typescript-transpile.mjs";
 
 function loadTypeScript(relativePath, imports = {}, context = {}) {
-    const code = ts.transpileModule(fs.readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"), {
-        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
-        reportDiagnostics: true,
-    });
-    assert.equal(code.diagnostics?.length, 0, `Failed to parse ${relativePath}`);
     const module = { exports: {} };
     vm.runInNewContext(
-        code.outputText,
+        transpileTs(relativePath),
         {
             module,
             exports: module.exports,

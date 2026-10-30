@@ -618,14 +618,16 @@ export default function App() {
                     className="fixed bottom-4 left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-center gap-3 rounded-lg border border-destructive/40 bg-card px-4 py-3 text-xs text-foreground shadow-2xl"
                 >
                     <span className="min-w-0 flex-1">{error}</span>
-                    <button
+                    <Button
+                        variant="ghost"
+                        size="icon-xs"
                         type="button"
                         aria-label="Dismiss error"
                         className="cursor-pointer rounded p-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
                         onClick={() => setError(null)}
                     >
                         ×
-                    </button>
+                    </Button>
                 </div>
             )}
             <div className="grid h-full min-h-0 grid-cols-[220px_minmax(300px,390px)_minmax(420px,1fr)]">

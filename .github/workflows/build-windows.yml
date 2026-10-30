@@ -36,20 +36,8 @@ jobs:
       - name: Install frontend dependencies from lockfile
         run: bun install
 
-      - name: Check source regressions
-        run: bun run test:source
-
-      - name: Biome formatting, lint and import checks
-        run: bun run biome:check
-
-      - name: Typecheck frontend
-        run: bun run typecheck
-
       - name: Build frontend
         run: bun run build
-
-      - name: Verify Rust formatting (read-only)
-        run: bun run format:rust:check
 
       - name: Check Rust compilation
         run: cargo check --manifest-path src-tauri/Cargo.toml

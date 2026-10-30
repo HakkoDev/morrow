@@ -1,92 +1,233 @@
 @import "tailwindcss";
 
 :root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color-scheme: dark;
-
-  /* Morrow — muted slate / warm stone palette. Dark mode is the product theme. */
-  --background: #2f3640;
-  --foreground: color-mix(in srgb, #b8c6bd 88%, white);
-
-  --card: color-mix(in srgb, #2f3640 78%, #4f5966);
-  --card-foreground: color-mix(in srgb, #b8c6bd 88%, white);
-
-  --popover: color-mix(in srgb, #2f3640 68%, #4f5966);
-  --popover-foreground: color-mix(in srgb, #b8c6bd 88%, white);
-
-  --primary: #c8b7a6;
-  --primary-foreground: #2f3640;
-
-  --secondary: #4f5966;
-  --secondary-foreground: color-mix(in srgb, #b8c6bd 88%, white);
-
-  --muted: color-mix(in srgb, #2f3640 62%, #4f5966);
-  --muted-foreground: #a79c91;
-
-  --accent: color-mix(in srgb, #4f5966 72%, #7d8f88);
-  --accent-foreground: color-mix(in srgb, #b8c6bd 90%, white);
-
-  --destructive: #9b6663;
-  --border: color-mix(in srgb, #4f5966 78%, #6f7682);
-  --input: #4f5966;
-  --ring: #b8c6bd;
-
-  --morrow-slate-soft: #6f7682;
-  --morrow-stone: #8b8178;
-  --morrow-stone-soft: #a79c91;
-  --morrow-sand: #c8b7a6;
-  --morrow-sage: #7d8f88;
-  --morrow-sage-soft: #b8c6bd;
+    color-scheme: dark;
+    /* Fallbacks before saved preferences hydrate; theme engine owns these tokens. */
+    --background: #0a0a0a;
+    --foreground: #f5f5f5;
+    --card: #121212;
+    --card-foreground: #f5f5f5;
+    --popover: #121212;
+    --popover-foreground: #f5f5f5;
+    --primary: #7c9082;
+    --primary-foreground: #000000;
+    --secondary: #1a1a1a;
+    --secondary-foreground: #f5f5f5;
+    --muted: #242424;
+    --muted-foreground: #a0a0a0;
+    --accent: #36443a;
+    --accent-foreground: #f5f5f5;
+    --destructive: #ef4444;
+    --destructive-foreground: #ffffff;
+    --border: #2a2a2a;
+    --input: #2a2a2a;
+    --ring: #7c9082;
+    --sidebar: #090909;
+    --sidebar-foreground: #f5f5f5;
+    --sidebar-primary: #7c9082;
+    --sidebar-primary-foreground: #000000;
+    --sidebar-accent: #36443a;
+    --sidebar-accent-foreground: #f5f5f5;
+    --sidebar-border: #2a2a2a;
+    --sidebar-ring: #7c9082;
+    --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+    --font-serif: Georgia, ui-serif, serif;
+    --font-mono: ui-monospace, monospace;
+    --font-heading: var(--font-sans);
+    --radius: 0.5rem;
+    --shadow: 0 2px 3px rgb(0 0 0 / 10%);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-panel: var(--panel);
+    --color-surface: var(--surface);
+    --color-surface-hover: var(--surface-hover);
 }
 
-* { box-sizing: border-box; }
-html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-body {
-  background: var(--background);
-  color: var(--foreground);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+* {
+    box-sizing: border-box;
 }
-button, input, textarea, select { font: inherit; }
-::selection { background: color-mix(in srgb, var(--primary) 36%, transparent); }
+html,
+body,
+#root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+}
+body {
+    font-family: var(--font-sans);
+    background: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+button,
+input,
+textarea,
+select {
+    font: inherit;
+}
+::selection {
+    background: color-mix(in srgb, var(--primary) 36%, transparent);
+}
 
 .mail-shell {
-  background:
-    radial-gradient(circle at 8% -12%, color-mix(in srgb, #c8b7a6 10%, transparent), transparent 31%),
-    radial-gradient(circle at 94% 108%, color-mix(in srgb, #7d8f88 9%, transparent), transparent 34%),
-    linear-gradient(145deg, color-mix(in srgb, #2f3640 94%, #4f5966), #2f3640 48%, color-mix(in srgb, #2f3640 93%, #8b8178));
+    background:
+        radial-gradient(circle at 8% -12%, color-mix(in srgb, var(--primary) 7%, transparent), transparent 31%),
+        radial-gradient(circle at 94% 108%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%), var(--background);
 }
 
 /* Keep sender-authored email HTML visually faithful. The surrounding Morrow chrome stays dark. */
-.message-html iframe { background: white; color-scheme: light; }
-.drag-region { -webkit-app-region: drag; }
-.no-drag { -webkit-app-region: no-drag; }
+.message-html iframe {
+    background: inherit;
+}
+.drag-region {
+    -webkit-app-region: drag;
+}
+.no-drag {
+    -webkit-app-region: no-drag;
+}
 
 input::placeholder,
-textarea::placeholder { color: color-mix(in srgb, #a79c91 72%, transparent); }
+textarea::placeholder {
+    color: color-mix(in srgb, var(--muted-foreground) 72%, transparent);
+}
 
 select option {
-  background: #2f3640;
-  color: var(--foreground);
+    background: var(--popover);
+    color: var(--foreground);
+}
+
+/* The selected font and layout tokens are shared by every native webview. */
+html {
+    letter-spacing: var(--tracking-normal, normal);
+}
+h1,
+h2,
+h3,
+h4 {
+    font-family: var(--font-heading, var(--font-sans));
+}
+button,
+input,
+textarea,
+select {
+    font-family: var(--font-sans);
+}
+
+/* Non-disabled controls signal interaction and retain visible keyboard focus. */
+button:not(:disabled),
+[role="menuitem"],
+[role="menuitemradio"],
+[role="button"] {
+    cursor: pointer;
+}
+button:disabled {
+    cursor: not-allowed;
+}
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+/* Short, restrained motion. Native Radix data-state transitions support exit animation. */
+@keyframes morrow-pop-in {
+    from {
+        opacity: 0;
+        transform: translateY(-4px) scale(0.99);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+/* DialogContent is already centered with Tailwind's translate utilities.
+   Animate the independent scale property so the animation cannot offset it. */
+@keyframes morrow-dialog-in {
+    from {
+        opacity: 0;
+        scale: 0.985;
+    }
+    to {
+        opacity: 1;
+        scale: 1;
+    }
+}
+@keyframes morrow-dialog-out {
+    from {
+        opacity: 1;
+        scale: 1;
+    }
+    to {
+        opacity: 0;
+        scale: 0.985;
+    }
+}
+@keyframes morrow-backdrop-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+@keyframes morrow-backdrop-out {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
+}
+.morrow-popover {
+    transform-origin: top center;
+    animation: morrow-pop-in 130ms ease-out both;
+}
+.morrow-dialog-overlay[data-state="open"] {
+    animation: morrow-backdrop-in 140ms ease-out both;
+}
+.morrow-dialog-overlay[data-state="closed"] {
+    animation: morrow-backdrop-out 110ms ease-in both;
+}
+.morrow-dialog-content[data-state="open"] {
+    animation: morrow-dialog-in 150ms ease-out both;
+}
+.morrow-dialog-content[data-state="closed"] {
+    animation: morrow-dialog-out 110ms ease-in both;
+}
+@media (prefers-reduced-motion: reduce) {
+    .morrow-popover,
+    .morrow-dialog-overlay[data-state],
+    .morrow-dialog-content[data-state] {
+        animation: none;
+        transition: none;
+    }
 }

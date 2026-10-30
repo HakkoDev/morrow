@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.7 — CI on Node.js 24
+
+- GitHub Actions now runs on Node.js 24 with current action releases (checkout, setup-node, upload-artifact).
+- CI verifies the lockfile, Tauri dependency pins, source regressions, Biome, typechecking, versions, Rust formatting, Clippy and Rust tests before packaging.
+- Applied rustfmt across the Rust backend and resolved the remaining Clippy warnings.
+- No intentional user-facing changes.
+
 ## v0.1.6 — Dependency refresh
 
 - Updated dompurify to 3.4.17, @radix-ui/react-separator to 1.2.0, tailwind-merge to 3.7.0 and @tauri-apps/plugin-dialog to 2.8.3.

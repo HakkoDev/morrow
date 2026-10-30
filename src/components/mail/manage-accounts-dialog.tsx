@@ -1,6 +1,7 @@
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { updatePreferences, usePreferences } from "@/lib/preferences";
 import type { Account } from "@/lib/types";
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
     onRemove: (account: Account) => void;
 }
 export function ManageAccountsDialog({ open, onOpenChange, accounts, onAdd, onEdit, onRemove }: Props) {
+    const preferences = usePreferences();
     return (
         <Dialog
             open={open}
@@ -36,6 +38,24 @@ export function ManageAccountsDialog({ open, onOpenChange, accounts, onAdd, onEd
                                     {item.email} · {item.imapHost}
                                 </div>
                             </div>
+                            <label
+                                className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+                                title="Disable desktop alerts for this account"
+                            >
+                                <input
+                                    type="checkbox"
+                                    checked={preferences.mutedAccounts.includes(item.id)}
+                                    onChange={(event) =>
+                                        updatePreferences({
+                                            mutedAccounts: event.target.checked
+                                                ? [...new Set([...preferences.mutedAccounts, item.id])]
+                                                : preferences.mutedAccounts.filter((id) => id !== item.id),
+                                        })
+                                    }
+                                    className="size-4 accent-[var(--primary)]"
+                                />
+                                Mute
+                            </label>
                             <Button
                                 variant="outline"
                                 size="sm"

@@ -6,8 +6,12 @@
 - Added SQLite FTS5 search over cached message metadata and bodies with per-account filtering.
 - Added local SQLite drafts with compose autosave and recovery, and account-scoped conversation lookup.
 - Added reply threading headers and strengthened cross-account message ownership checks.
+- Added per-account IMAP IDLE watchers with reconnect backoff, bounded sessions and the existing 60-second polling fallback.
+- Added opt-in private desktop notifications, per-account mute controls and tray Show/Quit actions.
+- Added basic rich-text compose, MIME HTML/plain-text alternatives and formatted local-draft persistence (SQLite schema 4).
+- Added offline `from:`, `in:`, `after:` and `before:` search filters with account/folder isolation and UTC calendar-date validation.
 - Licensed the project under GNU GPLv3 (`GPL-3.0-only`).
-- **Not release-verified:** Gmail/Microsoft OAuth2, native notifications and tray integration, real IMAP IDLE, remote-server draft synchronization and rich-text composing remain unfinished. Local frontend checks, Rust tests and Windows NSIS packaging pass; Linux packaging and live mail-server tests remain pending.
+- **Not release-verified:** Gmail/Microsoft OAuth2, remote-server draft synchronization, inline-image composition and taskbar badges remain unimplemented. Local checks and unsigned/test-signed Windows NSIS packaging pass; installed notification/tray behavior, Linux packaging, production signing and live-provider tests remain pending.
 
 ## v0.1.7 — CI on Node.js 24
 

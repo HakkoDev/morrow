@@ -1,11 +1,12 @@
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { FilePlus2, LoaderCircle, Paperclip, Send, X } from "lucide-react";
+import { Bold, FilePlus2, Italic, List, LoaderCircle, Paperclip, Send, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { escapeHtml, sanitizeOutgoingHtml } from "@/lib/compose-html";
 import { mailApi } from "@/lib/mail-api";
 import type { Account, LocalDraft } from "@/lib/types";
 
@@ -16,6 +17,7 @@ export interface ComposeSeed {
     attachments?: string[];
     subject?: string;
     body?: string;
+    htmlBody?: string | null;
     inReplyTo?: string | null;
     references?: string | null;
 }
@@ -59,6 +61,10 @@ export function ComposeWindow() {
     const [inReplyTo, setInReplyTo] = useState<string | null>(null);
     const [references, setReferences] = useState<string | null>(null);
     const [body, setBody] = useState("");
+    const [htmlBody, setHtmlBody] = useState<string | null>(null);
+    const editorRef = useRef<HTMLDivElement | null>(null);
+    const editorInitialHtml = useRef("");
+    const rich = htmlBody !== null;
     const [attachments, setAttachments] = useState<string[]>([]);
     const [busy, setBusy] = useState(false);
     const [loading, setLoading] = useState(true);
@@ -75,6 +81,8 @@ export function ComposeWindow() {
         setInReplyTo(seed.inReplyTo || null);
         setReferences(seed.references || null);
         setBody(seed.body || "");
+        editorInitialHtml.current = sanitizeOutgoingHtml(seed.htmlBody || "");
+        setHtmlBody(seed.htmlBody || null);
 
         void (async () => {
             try {
@@ -93,6 +101,8 @@ export function ComposeWindow() {
                     setInReplyTo(draft.inReplyTo || null);
                     setReferences(draft.references || null);
                     setBody(draft.body);
+                    editorInitialHtml.current = sanitizeOutgoingHtml(draft.htmlBody || "");
+                    setHtmlBody(draft.htmlBody || null);
                     setAttachments(draft.attachments);
                 }
             } catch (e) {
@@ -102,6 +112,34 @@ export function ComposeWindow() {
             }
         })();
     }, [accountId, seedKey, existingDraftId]);
+
+    useEffect(() => {
+        if (loading || !rich || !editorRef.current) return;
+        // The editor is uncontrolled while typing to preserve selection and
+        // caret position, but re-hydrates when opening an existing draft.
+        if (editorRef.current.innerHTML !== editorInitialHtml.current) editorRef.current.innerHTML = editorInitialHtml.current;
+    }, [loading, rich]);
+
+    function enableRich() {
+        if (rich) return;
+        const html = `<div>${escapeHtml(body).replace(/\n/g, "<br>")}</div>`;
+        editorInitialHtml.current = html;
+        setHtmlBody(html);
+    }
+    function disableRich() {
+        setHtmlBody(null);
+    }
+    function onRichInput() {
+        const editor = editorRef.current;
+        if (!editor) return;
+        setBody(editor.innerText);
+        setHtmlBody(sanitizeOutgoingHtml(editor.innerHTML));
+    }
+    function formatRich(command: "bold" | "italic" | "insertUnorderedList") {
+        editorRef.current?.focus();
+        document.execCommand(command);
+        onRichInput();
+    }
 
     // SQLite is the source of truth for drafts. Autosave independently of the
     // mailbox window; failed sends never destroy the local draft.
@@ -113,6 +151,7 @@ export function ComposeWindow() {
         bcc,
         subject,
         body,
+        htmlBody: htmlBody ? sanitizeOutgoingHtml(htmlBody) : null,
         attachments,
         inReplyTo,
         references,
@@ -137,7 +176,20 @@ export function ComposeWindow() {
     useEffect(() => {
         if (loading || !account || busy || !hasContent) return;
         setDraftState("idle");
-        const snapshot: LocalDraft = { id: draftId.current, accountId, to, cc, bcc, subject, body, attachments, inReplyTo, references, updatedAt: 0 };
+        const snapshot: LocalDraft = {
+            id: draftId.current,
+            accountId,
+            to,
+            cc,
+            bcc,
+            subject,
+            body,
+            htmlBody: htmlBody ? sanitizeOutgoingHtml(htmlBody) : null,
+            attachments,
+            inReplyTo,
+            references,
+            updatedAt: 0,
+        };
         const timer = window.setTimeout(() => {
             setDraftState("saving");
             const job = mailApi.saveLocalDraft(snapshot);
@@ -150,7 +202,7 @@ export function ComposeWindow() {
                 .catch((cause) => setError(`Could not save local draft: ${String(cause)}`));
         }, 900);
         return () => window.clearTimeout(timer);
-    }, [loading, account, busy, hasContent, accountId, to, cc, bcc, subject, body, attachments, inReplyTo, references]);
+    }, [loading, account, busy, hasContent, accountId, to, cc, bcc, subject, body, htmlBody, attachments, inReplyTo, references]);
 
     async function closeComposer() {
         await lastSave.current.catch(() => undefined);
@@ -181,6 +233,7 @@ export function ComposeWindow() {
                 bcc,
                 subject,
                 body,
+                htmlBody: htmlBody ? sanitizeOutgoingHtml(htmlBody) : null,
                 attachments,
                 inReplyTo,
                 references,
@@ -267,12 +320,93 @@ export function ComposeWindow() {
                 />
             </div>
 
-            <Textarea
-                className="min-h-0 flex-1 resize-none rounded-none border-0 p-5 shadow-none focus-visible:ring-0"
-                value={body}
-                onChange={(e) => setBody(e.target.value)}
-                placeholder="Write your message…"
-            />
+            <fieldset
+                className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-2"
+                aria-label="Message formatting"
+                disabled={busy}
+            >
+                <button
+                    type="button"
+                    aria-pressed={!rich}
+                    onClick={disableRich}
+                    className={`cursor-pointer rounded px-2 py-1 text-xs ${!rich ? "bg-accent text-accent-foreground" : "text-muted-foreground"}`}
+                >
+                    Plain text
+                </button>
+                <button
+                    type="button"
+                    aria-pressed={rich}
+                    onClick={enableRich}
+                    className={`cursor-pointer rounded px-2 py-1 text-xs ${rich ? "bg-accent text-accent-foreground" : "text-muted-foreground"}`}
+                >
+                    Rich text
+                </button>
+                {rich && (
+                    <div className="ml-auto flex gap-1">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            title="Bold"
+                            onClick={() => formatRich("bold")}
+                        >
+                            <Bold className="size-4" />
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            title="Italic"
+                            onClick={() => formatRich("italic")}
+                        >
+                            <Italic className="size-4" />
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7"
+                            title="List"
+                            onClick={() => formatRich("insertUnorderedList")}
+                        >
+                            <List className="size-4" />
+                        </Button>
+                    </div>
+                )}
+            </fieldset>
+            {rich ? (
+                // biome-ignore lint/a11y/useSemanticElements: A textarea cannot retain the supported rich-text markup.
+                <div
+                    ref={editorRef}
+                    contentEditable={!busy}
+                    tabIndex={0}
+                    suppressContentEditableWarning
+                    role="textbox"
+                    aria-label="Rich text message body"
+                    aria-multiline="true"
+                    className="min-h-0 flex-1 overflow-y-auto p-5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onInput={onRichInput}
+                    onPaste={(event) => {
+                        // Prevent pasted foreign HTML/tracking pixels/scripts.
+                        event.preventDefault();
+                        document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
+                    }}
+                    onDrop={(event) => {
+                        // Native HTML drops can otherwise insert live unsanitized DOM.
+                        event.preventDefault();
+                        if (!busy) document.execCommand("insertText", false, event.dataTransfer.getData("text/plain"));
+                    }}
+                />
+            ) : (
+                <Textarea
+                    className="min-h-0 flex-1 resize-none rounded-none border-0 p-5 shadow-none focus-visible:ring-0"
+                    value={body}
+                    onChange={(e) => setBody(e.target.value)}
+                    placeholder="Write your message…"
+                />
+            )}
 
             {attachments.length > 0 && (
                 <div className="flex shrink-0 flex-wrap gap-2 border-t border-border px-5 py-3">

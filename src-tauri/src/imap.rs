@@ -71,6 +71,47 @@ pub async fn connect(account: &Account, password: &str) -> Result<Session<DynStr
         .map_err(|(e, _)| format!("IMAP authentication failed: {e}"))
 }
 
+/// Wait for a server-side INBOX change. This is one bounded IDLE cycle on a
+/// dedicated connection, never the connection used by foreground commands.
+/// Unsupported IDLE and any network failure are handled by the caller's
+/// existing periodic polling fallback.
+pub async fn idle_inbox_once(account: &Account, password: &str) -> Result<bool, String> {
+    tokio::time::timeout(Duration::from_secs(180), idle_inbox_cycle(account, password))
+        .await
+        .map_err(|_| "IMAP IDLE session timed out".to_string())?
+}
+
+async fn idle_inbox_cycle(account: &Account, password: &str) -> Result<bool, String> {
+    use async_imap::extensions::idle::IdleResponse;
+    let mut session = connect(account, password).await?;
+    let caps = session.capabilities().await.map_err(|e| e.to_string())?;
+    if !caps.has_str("IDLE") {
+        return Err("IMAP IDLE not supported; using polling".into());
+    }
+    session.select("INBOX").await.map_err(|e| format!("IDLE select failed: {e}"))?;
+    let mut idle = session.idle();
+    tokio::time::timeout(Duration::from_secs(20), idle.init())
+        .await
+        .map_err(|_| "IMAP IDLE start timed out".to_string())?
+        .map_err(|e| e.to_string())?;
+    // Bounded cycles prevent hanging connections, and allow account removal
+    // to stop a watcher without retaining credentials indefinitely.
+    let result = {
+        let (response, _interrupt) = idle.wait_with_timeout(Duration::from_secs(110));
+        tokio::time::timeout(Duration::from_secs(125), response)
+            .await
+            .map_err(|_| "IMAP IDLE wait timed out".to_string())?
+            .map_err(|e| e.to_string())?
+    };
+    // Finish IDLE with DONE before reusing or closing the session.
+    let mut session = tokio::time::timeout(Duration::from_secs(15), idle.done())
+        .await
+        .map_err(|_| "IMAP IDLE DONE timed out".to_string())?
+        .map_err(|e| e.to_string())?;
+    let _ = tokio::time::timeout(Duration::from_secs(5), session.logout()).await;
+    Ok(matches!(result, IdleResponse::NewData(_)))
+}
+
 pub async fn test(account: &Account, password: &str) -> Result<(), String> {
     let mut session = connect(account, password).await?;
     session.noop().await.map_err(|e| e.to_string())?;
@@ -336,5 +377,92 @@ fn folder_rank(folder: &FolderInfo) -> u8 {
         6
     } else {
         20
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpListener;
+
+    async fn exercise_idle(supported: bool, disconnect: bool) -> Result<bool, String> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            stream.get_mut().write_all(b"* OK test server ready\r\n").await.unwrap();
+            let mut idle_tag = String::new();
+            loop {
+                let mut line = String::new();
+                if stream.read_line(&mut line).await.unwrap() == 0 {
+                    break;
+                }
+                let mut words = line.split_whitespace();
+                let tag = words.next().unwrap_or("");
+                let command = words.next().unwrap_or("").to_ascii_uppercase();
+                let response = if tag == "DONE" {
+                    format!("{idle_tag} OK idle finished\r\n")
+                } else {
+                    match command.as_str() {
+                        "LOGIN" => format!("{tag} OK logged in\r\n"),
+                        "CAPABILITY" => format!("* CAPABILITY IMAP4rev1{}\r\n{tag} OK capabilities\r\n", if supported { " IDLE" } else { "" }),
+                        "SELECT" => format!("* 0 EXISTS\r\n* OK [UIDVALIDITY 1]\r\n{tag} OK selected\r\n"),
+                        "IDLE" => {
+                            if disconnect {
+                                break;
+                            }
+                            idle_tag = tag.to_string();
+                            "+ idling\r\n* 1 EXISTS\r\n".to_string()
+                        }
+                        "LOGOUT" => format!("* BYE\r\n{tag} OK logout\r\n"),
+                        _ => panic!("Unexpected command: {line}"),
+                    }
+                };
+                stream.get_mut().write_all(response.as_bytes()).await.unwrap();
+                if command == "LOGOUT" {
+                    break;
+                }
+            }
+        });
+        let account = Account {
+            id: "test".into(),
+            display_name: "Test".into(),
+            email: "test@example.org".into(),
+            imap_host: "127.0.0.1".into(),
+            imap_port: port,
+            imap_security: SecurityMode::Plain,
+            imap_username: "test".into(),
+            smtp_host: "127.0.0.1".into(),
+            smtp_port: 25,
+            smtp_security: SecurityMode::Plain,
+            smtp_username: "test".into(),
+            sent_folder: "Sent".into(),
+            drafts_folder: "Drafts".into(),
+            trash_folder: "Trash".into(),
+            save_sent_copy: false,
+        };
+        let result = tokio::time::timeout(Duration::from_secs(5), idle_inbox_once(&account, "test-password"))
+            .await
+            .expect("IDLE fixture must finish");
+        tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn idle_receives_mail_and_finishes_with_done_before_logout() {
+        assert!(exercise_idle(true, false).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn unsupported_idle_returns_the_polling_fallback_signal() {
+        assert!(exercise_idle(false, false).await.unwrap_err().starts_with("IMAP IDLE not supported"));
+    }
+
+    #[tokio::test]
+    async fn disconnected_idle_session_errors_and_a_later_connection_can_recover() {
+        assert!(exercise_idle(true, true).await.is_err());
+        assert!(exercise_idle(true, false).await.unwrap());
     }
 }

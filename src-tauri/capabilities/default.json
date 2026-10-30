@@ -12,6 +12,9 @@
         "process:allow-restart",
         "core:event:allow-listen",
         "core:event:allow-unlisten",
-        "core:event:allow-emit"
+        "core:event:allow-emit",
+        "notification:allow-is-permission-granted",
+        "notification:allow-request-permission",
+        "notification:allow-notify"
     ]
 }

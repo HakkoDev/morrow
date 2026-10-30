@@ -66,6 +66,7 @@ export interface SendMessageInput {
     bcc?: string;
     subject: string;
     body: string;
+    htmlBody?: string | null;
     inReplyTo?: string | null;
     references?: string | null;
     attachments: string[];
@@ -84,6 +85,7 @@ export interface LocalDraft {
     bcc: string;
     subject: string;
     body: string;
+    htmlBody?: string | null;
     inReplyTo?: string | null;
     references?: string | null;
     attachments: string[];

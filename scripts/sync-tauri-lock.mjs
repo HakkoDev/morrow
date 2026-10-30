@@ -30,7 +30,9 @@ export function requiredTauriVersions(contents) {
     }
     const dialog = /^tauri-plugin-dialog\s*=\s*"=([0-9]+\.[0-9]+\.[0-9]+)"/m.exec(contents)?.[1];
     if (!dialog) throw new Error("Pin tauri-plugin-dialog to an exact version in src-tauri/Cargo.toml");
-    return { tauri: read("tauri"), "tauri-build": read("tauri-build"), "tauri-plugin-dialog": dialog };
+    const notification = /^tauri-plugin-notification\s*=\s*"=([0-9]+\.[0-9]+\.[0-9]+)"/m.exec(contents)?.[1];
+    if (!notification) throw new Error("Pin tauri-plugin-notification to an exact version in src-tauri/Cargo.toml");
+    return { tauri: read("tauri"), "tauri-build": read("tauri-build"), "tauri-plugin-dialog": dialog, "tauri-plugin-notification": notification };
 }
 
 export function mismatches(lockedContents, required) {

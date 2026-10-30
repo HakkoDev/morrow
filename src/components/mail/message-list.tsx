@@ -177,6 +177,7 @@ export function MessageList(props: Props) {
                         value={query}
                         onChange={(e) => onQueryChange(e.target.value)}
                         placeholder={unified ? "Search all accounts" : "Search cached mail"}
+                        title={unified ? "Search operators: from:alice in:INBOX after:2026-01-01 before:2026-12-01" : "Search cached messages in this folder"}
                         aria-label="Search cached messages"
                     />
                 </div>

@@ -1,3 +1,4 @@
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { Check, Palette, RotateCcw, Search, Shield, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,7 @@ function PreferenceCheckbox({
 }: {
     label: string;
     description: string;
-    field: "showPreviews" | "markReadOnOpen" | "allowRemoteImages" | "loadOnlineFonts" | "emailDarkMode";
+    field: "showPreviews" | "markReadOnOpen" | "allowRemoteImages" | "loadOnlineFonts" | "emailDarkMode" | "desktopNotifications";
     value: boolean;
 }) {
     return (
@@ -31,7 +32,20 @@ function PreferenceCheckbox({
             <input
                 type="checkbox"
                 checked={value}
-                onChange={(event) => updatePreferences({ [field]: event.target.checked } as Partial<Preferences>)}
+                onChange={(event) => {
+                    if (field !== "desktopNotifications" || !event.target.checked) {
+                        updatePreferences({ [field]: event.target.checked } as Partial<Preferences>);
+                        return;
+                    }
+                    void (async () => {
+                        try {
+                            const allowed = (await isPermissionGranted()) || (await requestPermission()) === "granted";
+                            updatePreferences({ desktopNotifications: allowed });
+                        } catch {
+                            updatePreferences({ desktopNotifications: false });
+                        }
+                    })();
+                }}
                 className="size-4 shrink-0 accent-[var(--primary)]"
             />
         </label>
@@ -250,6 +264,12 @@ export function SettingsDialog({ open, onOpenChange, onAccountSettings }: Props)
                             <div className="space-y-4">
                                 <h2 className="text-sm font-semibold">Reading mail</h2>
                                 <PreferenceCheckbox
+                                    field="desktopNotifications"
+                                    value={preferences.desktopNotifications}
+                                    label="Desktop notifications"
+                                    description="Show a generic new-mail notification. Morrow never includes sender names or message text in notifications. Off until you grant permission."
+                                />
+                                <PreferenceCheckbox
                                     field="showPreviews"
                                     value={preferences.showPreviews}
                                     label="Show message snippets"
@@ -268,8 +288,8 @@ export function SettingsDialog({ open, onOpenChange, onAccountSettings }: Props)
                                     description="Try to render HTML messages using a dark background. Use the reader toggle for individual preferences."
                                 />
                                 <div className="rounded-lg border border-border p-4 text-xs leading-6 text-muted-foreground">
-                                    Inbox sync runs in Rust while Morrow is open, normally every 60 seconds. Manual refresh is also available from the mailbox
-                                    toolbar.
+                                    INBOX uses IMAP IDLE when the server supports it, with a 60-second Rust polling fallback. Manual refresh is also available
+                                    from the mailbox toolbar.
                                 </div>
                                 {onAccountSettings && (
                                     <Button

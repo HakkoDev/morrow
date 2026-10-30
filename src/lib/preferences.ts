@@ -14,6 +14,8 @@ export interface Preferences {
     markReadOnOpen: boolean;
     allowRemoteImages: boolean;
     emailDarkMode: boolean;
+    desktopNotifications: boolean;
+    mutedAccounts: string[];
     loadOnlineFonts: boolean;
 }
 
@@ -26,6 +28,8 @@ export const DEFAULT_PREFERENCES: Readonly<Preferences> = Object.freeze({
     markReadOnOpen: true,
     allowRemoteImages: false,
     emailDarkMode: false,
+    desktopNotifications: false,
+    mutedAccounts: [],
     loadOnlineFonts: false,
 });
 
@@ -48,6 +52,10 @@ export function normalizePreferences(input: unknown): Preferences {
         markReadOnOpen: typeof value.markReadOnOpen === "boolean" ? value.markReadOnOpen : DEFAULT_PREFERENCES.markReadOnOpen,
         allowRemoteImages: typeof value.allowRemoteImages === "boolean" ? value.allowRemoteImages : DEFAULT_PREFERENCES.allowRemoteImages,
         emailDarkMode: typeof value.emailDarkMode === "boolean" ? value.emailDarkMode : DEFAULT_PREFERENCES.emailDarkMode,
+        desktopNotifications: typeof value.desktopNotifications === "boolean" ? value.desktopNotifications : DEFAULT_PREFERENCES.desktopNotifications,
+        mutedAccounts: Array.isArray(value.mutedAccounts)
+            ? [...new Set(value.mutedAccounts.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 128))].slice(0, 128)
+            : [],
         loadOnlineFonts: typeof value.loadOnlineFonts === "boolean" ? value.loadOnlineFonts : DEFAULT_PREFERENCES.loadOnlineFonts,
     };
 }

@@ -13,6 +13,7 @@ test("Tauri manifest pins match the JavaScript core API without changing the app
     const versions = requiredTauriVersions(manifest);
     assert.equal(versions.tauri, pkg.dependencies["@tauri-apps/api"]);
     assert.equal(versions["tauri-plugin-dialog"], pkg.dependencies["@tauri-apps/plugin-dialog"].replace(/^[~^]/, ""));
+    assert.equal(versions["tauri-plugin-notification"], pkg.dependencies["@tauri-apps/plugin-notification"].replace(/^[~^]/, ""));
     assert.equal(pkg.version, config.version);
     assert.equal(pkg.version, cargoVersion);
 });

@@ -1,5 +1,6 @@
 import ReactDOM from "react-dom/client";
 import { ComposeWindow } from "@/components/mail/compose-window";
+import { DesktopNotifications } from "@/components/mail/desktop-notifications";
 import { PreferencesController } from "@/components/settings/preferences-controller";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getPreferences } from "@/lib/preferences";
@@ -20,6 +21,7 @@ if (!container) {
 ReactDOM.createRoot(container).render(
     <TooltipProvider delayDuration={250}>
         <PreferencesController />
+        {params.get("view") !== "compose" && <DesktopNotifications />}
         {root}
     </TooltipProvider>,
 );

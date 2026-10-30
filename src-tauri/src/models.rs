@@ -97,6 +97,8 @@ pub struct SendMessageInput {
     pub subject: String,
     pub body: String,
     #[serde(default)]
+    pub html_body: Option<String>,
+    #[serde(default)]
     pub in_reply_to: Option<String>,
     #[serde(default)]
     pub references: Option<String>,
@@ -114,6 +116,8 @@ pub struct LocalDraft {
     pub bcc: String,
     pub subject: String,
     pub body: String,
+    #[serde(default)]
+    pub html_body: Option<String>,
     #[serde(default)]
     pub in_reply_to: Option<String>,
     #[serde(default)]

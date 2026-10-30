@@ -76,11 +76,21 @@ async fn build_message(account: &Account, input: &SendMessageInput) -> Result<Me
         builder = builder.bcc(mailbox);
     }
 
+    let message_body = if let Some(html) = input.html_body.as_deref().filter(|html| !html.trim().is_empty()) {
+        // Always provide a plain text alternative for clients that do not
+        // render HTML. The composer only permits limited formatting.
+        MultiPart::alternative()
+            .singlepart(SinglePart::plain(input.body.clone()))
+            .singlepart(SinglePart::builder().header(ContentType::TEXT_HTML).body(html.to_owned()))
+    } else {
+        MultiPart::alternative().singlepart(SinglePart::plain(input.body.clone()))
+    };
+
     if input.attachments.is_empty() {
-        return builder.singlepart(SinglePart::plain(input.body.clone())).map_err(|e| e.to_string());
+        return builder.multipart(message_body).map_err(|e| e.to_string());
     }
 
-    let mut multipart = MultiPart::mixed().singlepart(SinglePart::plain(input.body.clone()));
+    let mut multipart = MultiPart::mixed().multipart(message_body);
     for attachment_path in &input.attachments {
         let path = Path::new(attachment_path);
         let data = tokio::fs::read(path)
@@ -132,10 +142,55 @@ fn valid_message_ids(value: &str) -> bool {
 
 #[cfg(test)]
 mod reply_tests {
-    use super::valid_message_ids;
+    use super::*;
     #[test]
     fn reply_headers_cannot_inject_newlines() {
         assert!(valid_message_ids("<root@example.org> <reply@example.org>"));
         assert!(!valid_message_ids("<root@example.org>\r\nBcc:evil@example.org"));
+    }
+
+    #[tokio::test]
+    async fn rich_mail_contains_decodable_plain_and_html_alternatives_with_attachments() {
+        let account = Account {
+            id: "a".into(),
+            display_name: "Alice".into(),
+            email: "a@example.org".into(),
+            imap_host: "example.org".into(),
+            imap_port: 993,
+            imap_security: SecurityMode::Tls,
+            imap_username: "a".into(),
+            smtp_host: "example.org".into(),
+            smtp_port: 465,
+            smtp_security: SecurityMode::Tls,
+            smtp_username: "a".into(),
+            sent_folder: "Sent".into(),
+            drafts_folder: "Drafts".into(),
+            trash_folder: "Trash".into(),
+            save_sent_copy: true,
+        };
+        let mut input: SendMessageInput = serde_json::from_value(serde_json::json!({
+            "accountId": "a", "to": "to@example.org", "subject": "Rich message", "body": "Bold text",
+            "htmlBody": "<p><b>Bold text</b></p>", "inReplyTo": "<parent@example.org>", "references": "<parent@example.org>"
+        }))
+        .unwrap();
+        let raw = build_message(&account, &input).await.unwrap().formatted();
+        let parsed = mailparse::parse_mail(&raw).unwrap();
+        assert_eq!(parsed.ctype.mimetype, "multipart/alternative");
+        assert_eq!(parsed.subparts.len(), 2);
+        assert_eq!(parsed.subparts[0].ctype.mimetype, "text/plain");
+        assert_eq!(parsed.subparts[1].ctype.mimetype, "text/html");
+        assert!(parsed.subparts[0].get_body().unwrap().contains("Bold text"));
+        assert!(parsed.subparts[1].get_body().unwrap().contains("<b>Bold text</b>"));
+        let path = std::env::temp_dir().join(format!("morrow-mime-{}.txt", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"attachment contents").unwrap();
+        input.attachments.push(path.to_string_lossy().into_owned());
+        let built = build_message(&account, &input).await;
+        std::fs::remove_file(&path).unwrap();
+        let raw = built.unwrap().formatted();
+        let mixed = mailparse::parse_mail(&raw).unwrap();
+        assert_eq!(mixed.ctype.mimetype, "multipart/mixed");
+        assert_eq!(mixed.subparts[0].ctype.mimetype, "multipart/alternative");
+        assert_eq!(mixed.subparts[0].subparts.len(), 2);
+        assert_eq!(mixed.subparts[1].get_body_raw().unwrap(), b"attachment contents");
     }
 }

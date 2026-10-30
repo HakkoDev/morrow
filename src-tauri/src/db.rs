@@ -33,9 +33,9 @@ impl Database {
         let schema_version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        if schema_version > 3 {
+        if schema_version > 4 {
             return Err(format!(
-                "Mail cache schema version {schema_version} is newer than this Morrow build supports (3). Use a newer build to avoid corrupting your data."
+                "Mail cache schema version {schema_version} is newer than this Morrow build supports (4). Use a newer build to avoid corrupting your data."
             ));
         }
         connection
@@ -98,6 +98,7 @@ impl Database {
                 bcc TEXT NOT NULL DEFAULT '',
                 subject TEXT NOT NULL DEFAULT '',
                 body TEXT NOT NULL DEFAULT '',
+                html_body TEXT,
                 in_reply_to TEXT,
                 references_header TEXT,
                 attachments_json TEXT NOT NULL DEFAULT '[]',
@@ -172,6 +173,22 @@ impl Database {
                 }
             }
         }
+        if schema_version < 4 {
+            let has_html = {
+                let mut statement = connection.prepare("PRAGMA table_info(local_drafts)").map_err(|e| e.to_string())?;
+                let columns = statement.query_map([], |row| row.get::<_, String>(1)).map_err(|e| e.to_string())?;
+                columns
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?
+                    .iter()
+                    .any(|name| name == "html_body")
+            };
+            if !has_html {
+                connection
+                    .execute("ALTER TABLE local_drafts ADD COLUMN html_body TEXT", [])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         connection
             .execute_batch(
                 r#"
@@ -198,7 +215,7 @@ impl Database {
                 .execute("INSERT INTO message_fts(message_fts) VALUES('rebuild')", [])
                 .map_err(|e| e.to_string())?;
         }
-        connection.pragma_update(None, "user_version", 3).map_err(|e| e.to_string())?;
+        connection.pragma_update(None, "user_version", 4).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -342,27 +359,16 @@ impl Database {
     }
 
     pub fn list_messages(&self, account_id: &str, folder: &str, query: &str) -> Result<Vec<MessageSummary>, String> {
+        if !query.trim().is_empty() {
+            return self.search_messages_scoped(query, Some(account_id), Some(folder));
+        }
         let connection = self.connection()?;
-        let like = format!("%{}%", query.trim());
-        let sql = if query.trim().is_empty() {
-            "SELECT id, account_id, folder, uid, message_id, subject, sender, recipients, date, preview, flags_json, thread_key FROM messages WHERE account_id=?1 AND folder=?2 ORDER BY date DESC, uid DESC LIMIT 1000"
-        } else {
-            "SELECT id, account_id, folder, uid, message_id, subject, sender, recipients, date, preview, flags_json, thread_key FROM messages WHERE account_id=?1 AND folder=?2 AND (subject LIKE ?3 OR sender LIKE ?3 OR recipients LIKE ?3 OR preview LIKE ?3) ORDER BY date DESC, uid DESC LIMIT 1000"
-        };
+        let sql = "SELECT id, account_id, folder, uid, message_id, subject, sender, recipients, date, preview, flags_json, thread_key FROM messages WHERE account_id=?1 AND folder=?2 ORDER BY date DESC, uid DESC LIMIT 1000";
         let mut statement = connection.prepare(sql).map_err(|e| e.to_string())?;
         let mut out = Vec::new();
-        if query.trim().is_empty() {
-            let rows = statement.query_map(params![account_id, folder], summary_from_row).map_err(|e| e.to_string())?;
-            for row in rows {
-                out.push(row.map_err(|e| e.to_string())?);
-            }
-        } else {
-            let rows = statement
-                .query_map(params![account_id, folder, like], summary_from_row)
-                .map_err(|e| e.to_string())?;
-            for row in rows {
-                out.push(row.map_err(|e| e.to_string())?);
-            }
+        let rows = statement.query_map(params![account_id, folder], summary_from_row).map_err(|e| e.to_string())?;
+        for row in rows {
+            out.push(row.map_err(|e| e.to_string())?);
         }
         Ok(out)
     }
@@ -487,6 +493,53 @@ impl Database {
         Ok(exists != 0)
     }
 
+    pub fn max_cached_uid(&self, account_id: &str, folder: &str) -> Result<u32, String> {
+        let connection = self.connection()?;
+        let max: i64 = connection
+            .query_row(
+                "SELECT COALESCE(MAX(uid), 0) FROM messages WHERE account_id=?1 AND folder=?2 COLLATE NOCASE",
+                params![account_id, folder],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(max.max(0) as u32)
+    }
+
+    pub fn inbox_uid_validity(&self, account_id: &str) -> Result<Option<i64>, String> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT uid_validity FROM folder_state WHERE account_id=?1 AND folder='INBOX' COLLATE NOCASE",
+                [account_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()
+            .map(Option::flatten)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn new_unread_count(&self, account_id: &str, previous_uid: u32, previous_validity: Option<i64>) -> Result<usize, String> {
+        // First syncs and UIDVALIDITY resets are historical backfills, not new mail.
+        if previous_validity.is_none() || previous_validity != self.inbox_uid_validity(account_id)? {
+            return Ok(0);
+        }
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT flags_json FROM messages WHERE account_id=?1 AND folder='INBOX' COLLATE NOCASE AND uid>?2")
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(params![account_id, previous_uid], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let mut count = 0;
+        for row in rows {
+            let flags: Vec<String> = serde_json::from_str(&row.map_err(|e| e.to_string())?).unwrap_or_default();
+            if !flags.iter().any(|flag| flag.trim_start_matches('\\').eq_ignore_ascii_case("Seen")) {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
     pub fn unread_counts(&self) -> Result<std::collections::HashMap<String, usize>, String> {
         let connection = self.connection()?;
         let mut statement = connection
@@ -515,23 +568,66 @@ impl Database {
     }
 
     pub fn search_messages(&self, query: &str, account_id: Option<&str>) -> Result<Vec<MessageSummary>, String> {
-        // FTS5 input is tokenized and each token quoted. Caller input is never SQL.
-        let terms = query
-            .split_whitespace()
-            .take(12)
-            .map(|word| format!("\"{}\"", word.replace('"', "\"\"")))
-            .collect::<Vec<_>>();
-        if terms.is_empty() {
+        self.search_messages_scoped(query, account_id, None)
+    }
+
+    fn search_messages_scoped(&self, query: &str, account_id: Option<&str>, scope_folder: Option<&str>) -> Result<Vec<MessageSummary>, String> {
+        // Search operators are parsed into bound SQLite parameters. No part
+        // of a user's query is ever interpolated into the SQL statement.
+        let mut terms = Vec::new();
+        let mut sender = None;
+        let mut folder = scope_folder.map(str::to_owned);
+        let mut after = None;
+        let mut before = None;
+        for token in query.split_whitespace().take(32) {
+            if let Some(value) = token.strip_prefix("from:") {
+                if !value.is_empty() {
+                    sender = Some(value.to_string());
+                }
+            } else if let Some(value) = token.strip_prefix("in:") {
+                if !value.is_empty() {
+                    if let Some(scope) = scope_folder {
+                        if !scope.eq_ignore_ascii_case(value) {
+                            return Ok(Vec::new());
+                        }
+                    } else {
+                        folder = Some(value.to_string());
+                    }
+                }
+            } else if let Some(value) = token.strip_prefix("after:") {
+                if !valid_iso_date(value) {
+                    return Err("Invalid after: date; use a real YYYY-MM-DD UTC date".into());
+                }
+                after = Some(value.to_string());
+            } else if let Some(value) = token.strip_prefix("before:") {
+                if !valid_iso_date(value) {
+                    return Err("Invalid before: date; use a real YYYY-MM-DD UTC date".into());
+                }
+                before = Some(value.to_string());
+            } else if !token.is_empty() {
+                terms.push(format!("\"{}\"", token.replace('"', "\"\"")));
+            }
+        }
+        if terms.is_empty() && sender.is_none() && folder.is_none() && after.is_none() && before.is_none() {
             return Ok(Vec::new());
         }
         let expression = terms.join(" AND ");
+        let sender_like = sender.as_ref().map(|value| format!("%{}%", escape_like(value)));
         let connection = self.connection()?;
-        let sql = "SELECT m.id, m.account_id, m.folder, m.uid, m.message_id, m.subject, m.sender, m.recipients, m.date, m.preview, m.flags_json, m.thread_key FROM message_fts JOIN messages m ON m.id=message_fts.rowid WHERE message_fts MATCH ?1 AND (?2 IS NULL OR m.account_id=?2) ORDER BY m.date DESC, m.id DESC LIMIT 500";
+        let sql = if terms.is_empty() {
+            "SELECT m.id, m.account_id, m.folder, m.uid, m.message_id, m.subject, m.sender, m.recipients, m.date, m.preview, m.flags_json, m.thread_key FROM messages m WHERE (?1 IS NOT NULL) AND (?2 IS NULL OR m.account_id=?2) AND (?3 IS NULL OR m.sender LIKE ?3 ESCAPE '!') AND (?4 IS NULL OR m.folder=?4 COLLATE NOCASE) AND (?5 IS NULL OR date(m.date, 'unixepoch') >= ?5) AND (?6 IS NULL OR date(m.date, 'unixepoch') < ?6) ORDER BY m.date DESC, m.id DESC LIMIT 500"
+        } else {
+            "SELECT m.id, m.account_id, m.folder, m.uid, m.message_id, m.subject, m.sender, m.recipients, m.date, m.preview, m.flags_json, m.thread_key FROM message_fts JOIN messages m ON m.id=message_fts.rowid WHERE message_fts MATCH ?1 AND (?2 IS NULL OR m.account_id=?2) AND (?3 IS NULL OR m.sender LIKE ?3 ESCAPE '!') AND (?4 IS NULL OR m.folder=?4 COLLATE NOCASE) AND (?5 IS NULL OR date(m.date, 'unixepoch') >= ?5) AND (?6 IS NULL OR date(m.date, 'unixepoch') < ?6) ORDER BY m.date DESC, m.id DESC LIMIT 500"
+        };
         let mut statement = connection.prepare(sql).map_err(|e| e.to_string())?;
         let rows = statement
-            .query_map(params![expression, account_id], summary_from_row)
+            .query_map(params![expression, account_id, sender_like, folder, after, before], summary_from_row)
             .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+        let rows = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        Ok(rows
+            .into_iter()
+            .filter(|message| scope_folder.is_none_or(|scope| message.folder == scope))
+            .collect())
     }
 
     pub fn conversation(&self, account_id: &str, thread_key: &str) -> Result<Vec<MessageSummary>, String> {
@@ -551,18 +647,18 @@ impl Database {
         let connection = self.connection()?;
         // The SELECT guarantees an existing account; the ID is scoped to it.
         connection.execute(
-            "INSERT INTO local_drafts(id,account_id,to_address,cc,bcc,subject,body,in_reply_to,references_header,attachments_json,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,unixepoch()) ON CONFLICT(id) DO UPDATE SET to_address=excluded.to_address,cc=excluded.cc,bcc=excluded.bcc,subject=excluded.subject,body=excluded.body,in_reply_to=excluded.in_reply_to,references_header=excluded.references_header,attachments_json=excluded.attachments_json,updated_at=unixepoch() WHERE local_drafts.account_id=excluded.account_id",
-            params![draft.id,draft.account_id,draft.to,draft.cc,draft.bcc,draft.subject,draft.body,draft.in_reply_to,draft.references,serde_json::to_string(&draft.attachments).map_err(|e| e.to_string())?]
+            "INSERT INTO local_drafts(id,account_id,to_address,cc,bcc,subject,body,html_body,in_reply_to,references_header,attachments_json,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,unixepoch()) ON CONFLICT(id) DO UPDATE SET to_address=excluded.to_address,cc=excluded.cc,bcc=excluded.bcc,subject=excluded.subject,body=excluded.body,html_body=excluded.html_body,in_reply_to=excluded.in_reply_to,references_header=excluded.references_header,attachments_json=excluded.attachments_json,updated_at=unixepoch() WHERE local_drafts.account_id=excluded.account_id",
+            params![draft.id,draft.account_id,draft.to,draft.cc,draft.bcc,draft.subject,draft.body,draft.html_body,draft.in_reply_to,draft.references,serde_json::to_string(&draft.attachments).map_err(|e| e.to_string())?]
         ).map_err(|e| e.to_string())?;
         Ok(())
     }
 
     pub fn local_drafts(&self, account_id: &str) -> Result<Vec<LocalDraft>, String> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare("SELECT id,account_id,to_address,cc,bcc,subject,body,in_reply_to,references_header,attachments_json,updated_at FROM local_drafts WHERE account_id=?1 ORDER BY updated_at DESC, id LIMIT 200").map_err(|e| e.to_string())?;
+        let mut statement = connection.prepare("SELECT id,account_id,to_address,cc,bcc,subject,body,html_body,in_reply_to,references_header,attachments_json,updated_at FROM local_drafts WHERE account_id=?1 ORDER BY updated_at DESC, id LIMIT 200").map_err(|e| e.to_string())?;
         let rows = statement
             .query_map([account_id], |row| {
-                let attachments: String = row.get(9)?;
+                let attachments: String = row.get(10)?;
                 Ok(LocalDraft {
                     id: row.get(0)?,
                     account_id: row.get(1)?,
@@ -571,10 +667,11 @@ impl Database {
                     bcc: row.get(4)?,
                     subject: row.get(5)?,
                     body: row.get(6)?,
-                    in_reply_to: row.get(7)?,
-                    references: row.get(8)?,
+                    html_body: row.get(7)?,
+                    in_reply_to: row.get(8)?,
+                    references: row.get(9)?,
                     attachments: serde_json::from_str(&attachments).unwrap_or_default(),
-                    updated_at: row.get(10)?,
+                    updated_at: row.get(11)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -601,6 +698,28 @@ impl Database {
             .map_err(|e| e.to_string())?;
         Ok(value.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
     }
+}
+
+fn valid_iso_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' || !bytes.iter().enumerate().all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit()) {
+        return false;
+    }
+    let year = value[..4].parse::<u32>().unwrap_or(0);
+    let month = value[5..7].parse::<u32>().unwrap_or(0);
+    let day = value[8..10].parse::<u32>().unwrap_or(0);
+    let days = match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        _ => 0,
+    };
+    year > 0 && day > 0 && day <= days
+}
+
+fn escape_like(value: &str) -> String {
+    value.replace('!', "!!").replace('%', "!%").replace('_', "!_")
 }
 
 fn account_from_row(row: &rusqlite::Row<'_>) -> Account {
@@ -739,9 +858,99 @@ mod tests {
         assert_eq!(t.db.search_messages("searchable", Some("wrong-account")).unwrap().len(), 0);
         assert_eq!(t.db.unified_inbox().unwrap().len(), 1);
         assert_eq!(t.db.conversation("a", "root").unwrap().len(), 1);
+        assert_eq!(t.db.search_messages("from:sender", Some("a")).unwrap().len(), 1);
+        assert_eq!(t.db.search_messages("in:INBOX", Some("a")).unwrap().len(), 1);
+        assert!(t.db.search_messages("from:sender", Some("wrong-account")).unwrap().is_empty());
         assert_eq!(t.db.conversation("wrong-account", "root").unwrap().len(), 0);
         t.db.remove_cached_message("a", "INBOX", 21).unwrap();
         assert!(t.db.search_messages("searchable", None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn advanced_search_filters_are_offline_account_scoped_and_use_real_utc_dates() {
+        let t = TestDatabase::new();
+        t.with_account();
+        let connection = t.db.connection().unwrap();
+        for (uid, folder, date, sender) in [
+            (1, "INBOX", "2026-10-01", "billing@example.com"),
+            (2, "Sent", "2026-10-30", "billing@example.com"),
+            (3, "INBOX", "2026-09-30", "github.com"),
+        ] {
+            let mut message = crate::mime::cache_message(b"Subject: invoice\r\n\r\nbody", "a", folder, uid, vec![]).unwrap();
+            message.sender = sender.into();
+            message.date = connection.query_row("SELECT unixepoch(?1)", [date], |row| row.get(0)).unwrap();
+            t.db.upsert_message(&message).unwrap();
+        }
+        assert_eq!(t.db.search_messages("from:github.com", None).unwrap().len(), 1);
+        assert_eq!(t.db.search_messages("in:INBOX invoice", None).unwrap().len(), 2);
+        assert_eq!(t.db.search_messages("after:2026-10-01", None).unwrap().len(), 2);
+        let found = t.db.search_messages("from:billing@example.com before:2026-10-30", Some("a")).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].uid, 1);
+        assert!(t.db.search_messages("in:INBOX invoice", Some("other")).unwrap().is_empty());
+        assert!(t.db.search_messages("from:%", None).unwrap().is_empty());
+        assert!(t.db.search_messages("from:_", None).unwrap().is_empty());
+        assert_eq!(t.db.list_messages("a", "INBOX", "from:billing@example.com after:2026-10-01").unwrap().len(), 1);
+        assert!(t.db.list_messages("a", "INBOX", "in:Sent invoice").unwrap().is_empty());
+        for query in ["after:2026-02-30", "before:2026-13-01", "after:2026-10-00", "before:invalid"] {
+            assert!(t.db.search_messages(query, None).is_err(), "{query}");
+        }
+        assert!(valid_iso_date("2024-02-29"));
+        assert!(!valid_iso_date("2026-02-29"));
+    }
+
+    #[test]
+    fn notification_counts_exclude_initial_backfill_seen_messages_and_uid_resets() {
+        let t = TestDatabase::new();
+        t.with_account();
+        t.db.prepare_folder_sync("a", "INBOX", Some(7)).unwrap();
+        let validity = t.db.inbox_uid_validity("a").unwrap();
+        t.add(10);
+        assert_eq!(t.db.new_unread_count("a", 0, None).unwrap(), 0);
+        // An established empty inbox may notify its first genuinely new message.
+        assert_eq!(t.db.new_unread_count("a", 0, validity).unwrap(), 1);
+        t.add(5);
+        t.add(11);
+        assert_eq!(t.db.new_unread_count("a", 10, validity).unwrap(), 1);
+        t.db.set_cached_flags("a", "INBOX", 11, &["\\Seen".into()]).unwrap();
+        assert_eq!(t.db.new_unread_count("a", 10, validity).unwrap(), 0);
+        t.db.prepare_folder_sync("a", "INBOX", Some(8)).unwrap();
+        t.add(30);
+        assert_eq!(t.db.new_unread_count("a", 10, validity).unwrap(), 0);
+    }
+
+    #[test]
+    fn schema_three_drafts_migrate_without_losing_plain_text_or_fts_data() {
+        let t = TestDatabase::new();
+        t.with_account();
+        t.add(1);
+        let draft = LocalDraft {
+            id: "legacy".into(),
+            account_id: "a".into(),
+            to: "to@example.org".into(),
+            cc: String::new(),
+            bcc: String::new(),
+            subject: "Legacy".into(),
+            body: "plain draft".into(),
+            html_body: None,
+            in_reply_to: None,
+            references: None,
+            attachments: vec![],
+            updated_at: 0,
+        };
+        t.db.save_local_draft(&draft).unwrap();
+        t.db.connection()
+            .unwrap()
+            .execute_batch("ALTER TABLE local_drafts DROP COLUMN html_body; PRAGMA user_version = 3;")
+            .unwrap();
+        let migrated = Database::new(&t.dir).unwrap();
+        let mut recovered = migrated.local_drafts("a").unwrap().remove(0);
+        assert_eq!(recovered.body, "plain draft");
+        assert!(recovered.html_body.is_none());
+        assert_eq!(migrated.search_messages("terminology", None).unwrap().len(), 1);
+        recovered.html_body = Some("<p><b>rich draft</b></p>".into());
+        migrated.save_local_draft(&recovered).unwrap();
+        assert_eq!(Database::new(&t.dir).unwrap().local_drafts("a").unwrap()[0].html_body, recovered.html_body);
     }
 
     #[test]
@@ -830,6 +1039,7 @@ mod tests {
             bcc: String::new(),
             subject: "saved".into(),
             body: "not sent".into(),
+            html_body: Some("<p>not sent</p>".into()),
             in_reply_to: None,
             references: None,
             attachments: vec![],
@@ -839,6 +1049,7 @@ mod tests {
         let entries = t.db.local_drafts("a").unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].body, "not sent");
+        assert_eq!(entries[0].html_body.as_deref(), Some("<p>not sent</p>"));
         assert!(t.db.local_drafts("other").unwrap().is_empty());
         t.db.delete_local_draft("other", "draft-1").unwrap();
         assert_eq!(t.db.local_drafts("a").unwrap().len(), 1);

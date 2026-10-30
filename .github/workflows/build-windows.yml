@@ -37,6 +37,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          shared-key: morrow-windows
 
       - name: Install frontend dependencies from lockfile
         run: bun install --frozen-lockfile

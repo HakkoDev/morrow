@@ -58,13 +58,15 @@ test("signed updater is only available to main window", () => {
 test("GitHub release workflow publishes signed updater metadata", () => {
     const ci = read(".github/workflows/release.yml");
     const generator = read("scripts/prepare-release.mjs");
-    assert.match(ci, /tauri-apps\/tauri-action@v1/);
-    assert.match(ci, /uploadUpdaterJson: true/);
-    assert.match(ci, /updaterJsonPreferNsis: true/);
+    assert.match(ci, /actions\/upload-artifact@v7/);
+    assert.match(ci, /actions\/download-artifact@v7/);
+    assert.match(ci, /create-updater-manifest\.mjs/);
+    assert.match(ci, /gh release upload/);
+    assert.doesNotMatch(ci, /max-parallel:\s*1/);
+    assert.doesNotMatch(ci, /uploadUpdaterJson:\s*true/);
     assert.match(ci, /TAURI_SIGNING_PRIVATE_KEY:/);
     assert.match(ci, /ubuntu-22\.04/);
     assert.match(ci, /windows-latest/);
-    assert.match(ci, /max-parallel: 1/);
     assert.match(generator, /createUpdaterArtifacts: true/);
     assert.match(generator, /releases\/latest\/download\/latest\.json/);
     assert.doesNotMatch(generator, /privateKey\s*:/);
@@ -138,7 +140,7 @@ test("Biome and Rust formatting share the project style", () => {
     assert.match(pkg.scripts.format, /format:rust/);
     assert.match(pkg.scripts.quality, /biome:check/);
     assert.match(read(".github/workflows/build-windows.yml"), /bun run biome:check/);
-    assert.match(read(".github/workflows/release.yml"), /cargo fmt .*--check/);
+    assert.match(read(".github/workflows/build-windows.yml"), /cargo fmt .*--check/);
 });
 
 test("Biome accessibility and React lifecycle fixes remain present", () => {

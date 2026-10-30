@@ -49,3 +49,19 @@ cargo test --manifest-path src-tauri/Cargo.toml
 ## Appearance and preferences
 
 See [docs/appearance.md](docs/appearance.md) for the theme token system and local preferences. Keep new UI colors on semantic shadcn tokens and ensure native compose windows receive setting changes.
+
+## Tagged releases
+
+The release workflow builds Windows NSIS and Linux AppImage/DEB packages in parallel.
+The final job waits for both, then uploads the signed installers and a single
+`latest.json` manifest. Do not publish the draft if verification fails.
+
+Rust tests, Clippy and the Windows installer run in the `Verify and build Morrow`
+workflow on `main`. Require that workflow to pass before tagging a release;
+tagged release builds intentionally avoid repeating those expensive checks.
+The release profile uses Thin LTO with eight codegen units to reduce compilation time.
+
+Inspect the timings for **Build signed packages**, **Linux native dependencies**,
+and **Cache Rust dependencies** if future builds seem slow. A cold cache will still
+require substantial Rust compilation. Never overwrite an already published
+release tag just to rerun the build.

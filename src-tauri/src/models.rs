@@ -39,7 +39,7 @@ pub struct AccountInput {
     pub smtp_password: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderInfo {
     pub name: String,

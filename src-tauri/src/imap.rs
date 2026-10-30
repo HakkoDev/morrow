@@ -1,4 +1,4 @@
-use std::{fmt::Debug, pin::Pin};
+use std::{fmt::Debug, pin::Pin, time::Duration};
 
 use async_imap::{types::{Flag, NameAttribute}, Client, Session};
 use futures::TryStreamExt;
@@ -12,9 +12,14 @@ impl<T> MailStream for T where T: AsyncRead + AsyncWrite + Unpin + Send + Debug 
 type DynStream = Pin<Box<dyn MailStream>>;
 
 pub async fn connect(account: &Account, password: &str) -> Result<Session<DynStream>, String> {
-    let tcp = TcpStream::connect((account.imap_host.as_str(), account.imap_port))
-        .await
-        .map_err(|e| format!("IMAP TCP connection failed: {e}"))?;
+    // Without a connection deadline a dead endpoint can block manual account setup forever.
+    let tcp = tokio::time::timeout(
+        Duration::from_secs(15),
+        TcpStream::connect((account.imap_host.as_str(), account.imap_port)),
+    )
+    .await
+    .map_err(|_| "IMAP connection timed out after 15 seconds".to_string())?
+    .map_err(|e| format!("IMAP TCP connection failed: {e}"))?;
 
     let tls = TlsConnector::from(native_tls::TlsConnector::builder().build().map_err(|e| e.to_string())?);
 
@@ -68,8 +73,22 @@ pub async fn list_folders(account: &Account, password: &str) -> Result<Vec<Folde
         }
     }).collect::<Vec<_>>();
     output.sort_by(|a, b| folder_rank(a).cmp(&folder_rank(b)).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-    session.logout().await.map_err(|e| e.to_string())?;
+    let _ = session.logout().await;
     Ok(output)
+}
+
+pub async fn create_folder(account: &Account, password: &str, name: &str) -> Result<(), String> {
+    let mut session = connect(account, password).await?;
+    session.create(name).await.map_err(|e| format!("Could not create folder: {e}"))?;
+    let _ = session.logout().await;
+    Ok(())
+}
+
+pub async fn remove_folder(account: &Account, password: &str, name: &str) -> Result<(), String> {
+    let mut session = connect(account, password).await?;
+    session.delete(name).await.map_err(|e| format!("Could not delete folder: {e}"))?;
+    let _ = session.logout().await;
+    Ok(())
 }
 
 pub async fn special_folder(account: &Account, password: &str, attribute: &str) -> Result<Option<String>, String> {
@@ -88,7 +107,7 @@ pub async fn sync_folder(db: &Database, account: &Account, password: &str, folde
     let server_uids = session.uid_search("ALL").await.map_err(|e| e.to_string())?;
     db.prune_missing_uids(&account.id, folder, &server_uids)?;
     if server_uids.is_empty() {
-        session.logout().await.map_err(|e| e.to_string())?;
+        let _ = session.logout().await;
         return Ok(0);
     }
 
@@ -135,7 +154,7 @@ pub async fn sync_folder(db: &Database, account: &Account, password: &str, folde
         }
     }
 
-    session.logout().await.map_err(|e| e.to_string())?;
+    let _ = session.logout().await;
     Ok(synced)
 }
 
@@ -148,47 +167,75 @@ pub async fn set_flag(account: &Account, password: &str, folder: &str, uid: u32,
         let stream = session.uid_store(uid.to_string(), query).await.map_err(|e| e.to_string())?;
         stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?;
     }
-    session.logout().await.map_err(|e| e.to_string())?;
+    // The requested mutation already succeeded. A failed LOGOUT must not
+    // invite the caller to repeat a potentially non-idempotent action.
+    let _ = session.logout().await;
     Ok(())
 }
 
+/// Move exactly one UID. Never run mailbox-wide EXPUNGE as a fallback: it can
+/// delete unrelated messages that another client has flagged as \Deleted.
 pub async fn move_message(account: &Account, password: &str, folder: &str, uid: u32, destination: &str) -> Result<(), String> {
+    if folder.eq_ignore_ascii_case(destination) {
+        return Err("Source and destination folders are the same".into());
+    }
     let mut session = connect(account, password).await?;
     session.select(folder).await.map_err(|e| e.to_string())?;
-    if session.uid_mv(uid.to_string(), destination).await.is_err() {
-        session.uid_copy(uid.to_string(), destination).await.map_err(|e| e.to_string())?;
+    let caps = session.capabilities().await.map_err(|e| e.to_string())?;
+    if caps.has_str("MOVE") {
+        // If an advertised MOVE fails, do not blindly copy and risk duplicates.
+        session.uid_mv(uid.to_string(), destination).await.map_err(|e| e.to_string())?;
+    } else if caps.has_str("UIDPLUS") {
+        session.uid_copy(uid.to_string(), destination).await.map_err(|e| format!("IMAP copy failed: {e}"))?;
         {
-            let stream = session.uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)").await.map_err(|e| e.to_string())?;
-            stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?;
+            let stream = session.uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)")
+                .await.map_err(|e| format!("Message copied, but marking the original deleted failed: {e}. Check destination before retrying."))?;
+            stream.try_collect::<Vec<_>>().await.map_err(|e| format!("Message copied, but deletion failed: {e}. Check destination before retrying."))?;
         }
         {
-            let stream = session.expunge().await.map_err(|e| e.to_string())?;
-            stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?;
+            let stream = session.uid_expunge(uid.to_string()).await
+                .map_err(|e| format!("Message copied, but UID-scoped expunge failed: {e}. Check destination before retrying."))?;
+            stream.try_collect::<Vec<_>>().await
+                .map_err(|e| format!("Message copied, but UID-scoped expunge failed: {e}. Check destination before retrying."))?;
         }
+    } else {
+        return Err("This IMAP server supports neither MOVE nor UIDPLUS. Morrow will not use unsafe mailbox-wide EXPUNGE; move the message in another client.".into());
     }
-    session.logout().await.map_err(|e| e.to_string())?;
+    // The requested mutation already succeeded. A failed LOGOUT must not
+    // invite the caller to repeat a potentially non-idempotent action.
+    let _ = session.logout().await;
     Ok(())
 }
 
+/// Permanent deletion is deliberately restricted to UIDPLUS servers. Normal
+/// EXPUNGE would remove *every* deleted message in this folder.
 pub async fn permanently_delete(account: &Account, password: &str, folder: &str, uid: u32) -> Result<(), String> {
     let mut session = connect(account, password).await?;
     session.select(folder).await.map_err(|e| e.to_string())?;
+    let caps = session.capabilities().await.map_err(|e| e.to_string())?;
+    if !caps.has_str("UIDPLUS") {
+        return Err("Safe permanent deletion requires IMAP UIDPLUS. No messages were deleted.".into());
+    }
     {
         let stream = session.uid_store(uid.to_string(), "+FLAGS.SILENT (\\Deleted)").await.map_err(|e| e.to_string())?;
         stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?;
     }
     {
-        let stream = session.expunge().await.map_err(|e| e.to_string())?;
+        let stream = session.uid_expunge(uid.to_string()).await.map_err(|e| e.to_string())?;
         stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?;
     }
-    session.logout().await.map_err(|e| e.to_string())?;
+    // The requested mutation already succeeded. A failed LOGOUT must not
+    // invite the caller to repeat a potentially non-idempotent action.
+    let _ = session.logout().await;
     Ok(())
 }
 
 pub async fn append(account: &Account, password: &str, folder: &str, raw: &[u8], flags: Option<&str>) -> Result<(), String> {
     let mut session = connect(account, password).await?;
     session.append(folder, flags, None, raw).await.map_err(|e| format!("Could not append message to {folder}: {e}"))?;
-    session.logout().await.map_err(|e| e.to_string())?;
+    // The requested mutation already succeeded. A failed LOGOUT must not
+    // invite the caller to repeat a potentially non-idempotent action.
+    let _ = session.logout().await;
     Ok(())
 }
 

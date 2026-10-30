@@ -62,7 +62,10 @@ fn extract_bodies(parsed: &ParsedMail<'_>) -> (String, Option<String>) {
     let mut html = None;
     collect_bodies(parsed, &mut text, &mut html);
 
-    if text.is_none() && parsed.subparts.is_empty() {
+    // Only fall back to the raw body for a single-part message that has neither
+    // a text nor an HTML representation. HTML-only mail must use the stripped
+    // fallback below instead of leaking markup into the preview.
+    if text.is_none() && html.is_none() && parsed.subparts.is_empty() {
         text = parsed.get_body().ok();
     }
 
@@ -166,4 +169,64 @@ fn strip_html(value: &str) -> String {
         }
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::MessageSummary;
+
+    fn summary() -> MessageSummary {
+        MessageSummary {
+            id: 1, account_id: "test".into(), folder: "INBOX".into(), uid: 12,
+            message_id: None, subject: String::new(), sender: String::new(),
+            recipients: String::new(), date: 0, preview: String::new(), flags: vec![],
+        }
+    }
+
+    #[test]
+    fn plain_text_message_and_headers() {
+        let raw = b"From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Check in\r\nMessage-ID: <abc@example.com>\r\n\r\nHello from Morrow!";
+        let cached = cache_message(raw, "test", "INBOX", 12, vec!["Seen".into()]).unwrap();
+        assert_eq!(cached.subject, "Check in");
+        assert_eq!(cached.message_id.as_deref(), Some("<abc@example.com>"));
+        assert!(cached.preview.contains("Hello from Morrow"));
+        let detailed = message_detail(summary(), String::new(), raw).unwrap();
+        assert!(detailed.body_text.contains("Hello from Morrow"));
+        assert!(detailed.attachments.is_empty());
+    }
+
+    #[test]
+    fn nested_mime_attachments_are_counted_and_decoded_consistently() {
+        let raw = concat!(
+            "MIME-Version: 1.0\r\n",
+            "Content-Type: multipart/mixed; boundary=outer\r\n\r\n",
+            "--outer\r\nContent-Type: multipart/alternative; boundary=inner\r\n\r\n",
+            "--inner\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nText content\r\n",
+            "--inner\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>HTML content</p>\r\n",
+            "--inner--\r\n",
+            "--outer\r\nContent-Type: application/octet-stream\r\n",
+            "Content-Disposition: attachment; filename=sample.txt\r\n",
+            "Content-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n",
+            "--outer--\r\n"
+        ).as_bytes();
+        let detailed = message_detail(summary(), String::new(), raw).unwrap();
+        assert_eq!(detailed.body_text.trim(), "Text content");
+        assert!(detailed.body_html.as_deref().unwrap().contains("HTML content"));
+        assert_eq!(detailed.attachments.len(), 1);
+        assert_eq!(detailed.attachments[0].name, "sample.txt");
+        assert_eq!(detailed.attachments[0].size, 5);
+        assert_eq!(detailed.attachments[0].index, 0);
+        let (filename, bytes) = attachment_bytes(raw, 0).unwrap();
+        assert_eq!(filename, "sample.txt");
+        assert_eq!(bytes, b"hello");
+        assert!(attachment_bytes(raw, 1).is_err());
+    }
+
+    #[test]
+    fn html_fallback_gives_readable_preview() {
+        let raw = b"Content-Type: text/html; charset=utf-8\r\n\r\n<p>Only <b>HTML</b> here</p>";
+        let cached = cache_message(raw, "test", "INBOX", 12, vec![]).unwrap();
+        assert!(cached.preview.contains("Only HTML here"));
+    }
 }

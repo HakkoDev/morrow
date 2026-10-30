@@ -82,12 +82,26 @@ async fn build_message(account: &Account, input: &SendMessageInput) -> Result<Me
         builder = builder.bcc(mailbox);
     }
 
-    let message_body = if let Some(html) = input.html_body.as_deref().filter(|html| !html.trim().is_empty()) {
-        // Always provide a plain text alternative for clients that do not
-        // render HTML. The composer only permits limited formatting.
-        MultiPart::alternative()
-            .singlepart(SinglePart::plain(input.body.clone()))
-            .singlepart(SinglePart::builder().header(ContentType::TEXT_HTML).body(html.to_owned()))
+    let (html, inline_images) = match input.html_body.as_deref().filter(|html| !html.trim().is_empty()) {
+        Some(html) => {
+            let (processed, images) = extract_inline_images(html)?;
+            (Some(processed), images)
+        }
+        None => (None, Vec::new()),
+    };
+    // Keep multipart/alternative for clients with no HTML support. CID images
+    // live in multipart/related, never as external tracking URLs.
+    let message_body = if let Some(html) = html {
+        let alternative = MultiPart::alternative().singlepart(SinglePart::plain(input.body.clone()));
+        if inline_images.is_empty() {
+            alternative.singlepart(SinglePart::builder().header(ContentType::TEXT_HTML).body(html))
+        } else {
+            let mut related = MultiPart::related().singlepart(SinglePart::builder().header(ContentType::TEXT_HTML).body(html));
+            for (cid, mime, bytes) in inline_images {
+                related = related.singlepart(Attachment::new_inline(cid).body(bytes, ContentType::parse(&mime).map_err(|e| e.to_string())?));
+            }
+            alternative.multipart(related)
+        }
     } else {
         MultiPart::alternative().singlepart(SinglePart::plain(input.body.clone()))
     };
@@ -108,6 +122,96 @@ async fn build_message(account: &Account, input: &SendMessageInput) -> Result<Me
         multipart = multipart.singlepart(Attachment::new(filename).body(data, content_type));
     }
     builder.multipart(multipart).map_err(|e| e.to_string())
+}
+
+/// Convert explicitly inserted data-URL images to MIME CID attachments. A
+/// server-side size/count check means compromised renderer HTML cannot force
+/// unbounded processing or inject arbitrary attachment types.
+type InlineImage = (String, String, Vec<u8>);
+
+fn extract_inline_images(html: &str) -> Result<(String, Vec<InlineImage>), String> {
+    use std::{
+        borrow::Cow,
+        collections::{HashMap, HashSet},
+        sync::{Arc, Mutex},
+    };
+    if html.len() > 17_000_000 {
+        return Err("Rich-text body is too large".into());
+    }
+    // Parse HTML rather than searching substrings: quoting, casing, entities and
+    // text mentioning src= must not bypass limits or create broken MIME parts.
+    let images = Arc::new(Mutex::new(Vec::<InlineImage>::new()));
+    let error = Arc::new(Mutex::new(None::<String>));
+    let found = Arc::clone(&images);
+    let failure = Arc::clone(&error);
+    let output = ammonia::Builder::default()
+        .tags(
+            ["div", "p", "br", "b", "strong", "em", "i", "u", "ul", "ol", "li", "span", "blockquote", "img"]
+                .into_iter()
+                .collect(),
+        )
+        .generic_attributes(HashSet::new())
+        .tag_attributes(HashMap::from([("img", HashSet::from(["src", "alt"]))]))
+        .url_schemes(HashSet::from(["data", "cid"]))
+        .attribute_filter(move |tag, attribute, value| {
+            if tag != "img" {
+                return None;
+            }
+            if attribute == "alt" {
+                return Some(Cow::Owned(value.chars().take(256).collect()));
+            }
+            if attribute != "src" {
+                return None;
+            }
+            let mut images = found.lock().expect("image extraction lock");
+            let parsed = (|| -> Result<_, String> {
+                if images.len() >= 5 {
+                    return Err("No more than five inline images are supported".into());
+                }
+                let (media, encoded) = value.split_once(";base64,").ok_or("Inline images must use base64 data URLs")?;
+                let media = media.strip_prefix("data:").ok_or("Inline images must use data URLs")?;
+                if !matches!(media, "image/png" | "image/jpeg" | "image/gif" | "image/webp") {
+                    return Err("Unsupported inline image format".into());
+                }
+                if encoded.len() > 2_796_204 {
+                    return Err("Inline image exceeds the 2 MB limit".into());
+                }
+                let bytes = decode_image_base64(encoded)?;
+                if bytes.is_empty() || bytes.len() > 2 * 1024 * 1024 {
+                    return Err("Inline image exceeds the 2 MB limit or is empty".into());
+                }
+                if infer::get(&bytes).is_none_or(|kind| kind.mime_type() != media) {
+                    return Err("Inline image content does not match its declared format".into());
+                }
+                Ok((media.to_owned(), bytes))
+            })();
+            match parsed {
+                Ok((mime, bytes)) => {
+                    let cid = format!("morrow-inline-{}@morrow.invalid", images.len() + 1);
+                    let source = format!("cid:{cid}");
+                    images.push((cid, mime, bytes));
+                    Some(Cow::Owned(source))
+                }
+                Err(message) => {
+                    *failure.lock().expect("image error lock") = Some(message);
+                    None
+                }
+            }
+        })
+        .clean(html)
+        .to_string();
+    if let Some(error) = error.lock().expect("image error lock").take() {
+        return Err(error);
+    }
+    let images = std::mem::take(&mut *images.lock().expect("image extraction lock"));
+    Ok((output, images))
+}
+
+fn decode_image_base64(encoded: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("Invalid inline image base64: {error}"))
 }
 
 fn parse_mailboxes(value: &str) -> Result<Vec<Mailbox>, String> {
@@ -200,5 +304,43 @@ mod reply_tests {
         assert_eq!(mixed.subparts[0].ctype.mimetype, "multipart/alternative");
         assert_eq!(mixed.subparts[0].subparts.len(), 2);
         assert_eq!(mixed.subparts[1].get_body_raw().unwrap(), b"attachment contents");
+    }
+}
+
+#[cfg(test)]
+mod inline_image_tests {
+    use super::{decode_image_base64, extract_inline_images};
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=";
+
+    #[test]
+    fn cid_image_mime_is_generated_and_base64_is_validated() {
+        for source in [
+            format!("<p><img src=\"data:image/png;base64,{PNG}\"></p>"),
+            format!("<IMG SRC='data:image/png;base64,{PNG}'>"),
+        ] {
+            let (html, images) = extract_inline_images(&source).unwrap();
+            assert!(html.contains("src=\"cid:morrow-inline-1@morrow.invalid\""));
+            assert_eq!(images[0].2, decode_image_base64(PNG).unwrap());
+        }
+        assert!(decode_image_base64("aGVsbG8===").is_err());
+        assert!(decode_image_base64("____").is_err());
+    }
+
+    #[test]
+    fn inline_images_enforce_content_count_size_and_sanitization() {
+        let image = format!("<img src=\"data:image/png;base64,{PNG}\">");
+        assert_eq!(extract_inline_images(&image.repeat(5)).unwrap().1.len(), 5);
+        assert!(extract_inline_images(&image.repeat(6)).is_err());
+        for source in [
+            "<img src='data:image/png;base64,aGVsbG8='>".into(),
+            format!("<img src='data:image/jpeg;base64,{PNG}'>"),
+            format!("<img src='data:image/svg+xml;base64,{PNG}'>"),
+            format!("<img src='data:image/png;base64,{}'>", "A".repeat(2_796_205)),
+        ] {
+            assert!(extract_inline_images(&source).is_err());
+        }
+        let (html, images) = extract_inline_images("<script>alert(1)</script><p onclick='alert(1)'>src=not-an-image</p>").unwrap();
+        assert!(images.is_empty());
+        assert!(!html.contains("script") && !html.contains("onclick"));
     }
 }

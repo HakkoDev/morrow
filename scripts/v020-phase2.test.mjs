@@ -47,7 +47,7 @@ test("rich HTML draft format survives local migration and creates MIME multipart
     const smtp = read("src-tauri/src/smtp.rs");
     const compose = read("src/components/mail/compose-window.tsx");
     assert.match(db, /ALTER TABLE local_drafts ADD COLUMN html_body TEXT/);
-    assert.match(db, /connection\.pragma_update\(None, "user_version", 4\)/);
+    assert.match(db, /connection\.pragma_update\(None, "user_version", 6\)/);
     assert.match(smtp, /MultiPart::alternative\(\)/);
     assert.match(smtp, /ContentType::TEXT_HTML/);
     assert.match(compose, /sanitizeOutgoingHtml\(htmlBody\)/);

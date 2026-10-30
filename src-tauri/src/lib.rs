@@ -1,6 +1,7 @@
 mod commands;
 mod credentials;
 mod db;
+mod draft_sync;
 mod imap;
 mod mime;
 mod models;
@@ -238,6 +239,12 @@ pub fn run() {
             commands::save_local_draft,
             commands::list_local_drafts,
             commands::delete_local_draft,
+            commands::sync_remote_draft,
+            commands::refresh_remote_drafts,
+            commands::resolve_draft_conflict,
+            commands::draft_sync_statuses,
+            commands::set_draft_editor_active,
+            commands::delete_remote_draft,
             commands::get_message,
             commands::set_message_flag,
             commands::move_message,

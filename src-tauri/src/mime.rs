@@ -26,7 +26,7 @@ pub fn cache_message(raw: &[u8], account_id: &str, folder: &str, uid: u32, flags
         .trim()
         .to_ascii_lowercase();
     let date = headers.get_first_value("Date").and_then(|value| dateparse(&value).ok()).unwrap_or(0);
-    let (text, _) = extract_bodies(&parsed);
+    let (text, _) = draft_bodies(&parsed);
     let preview = preview(&text, 240);
 
     Ok(CachedMessage {
@@ -49,7 +49,7 @@ pub fn cache_message(raw: &[u8], account_id: &str, folder: &str, uid: u32, flags
 
 pub fn message_detail(summary: MessageSummary, cc: String, raw: &[u8]) -> Result<MessageDetail, String> {
     let parsed = parse_mail(raw).map_err(|e| e.to_string())?;
-    let (body_text, body_html) = extract_bodies(&parsed);
+    let (body_text, body_html) = draft_bodies(&parsed);
     let attachments = attachment_infos(&parsed);
 
     Ok(MessageDetail {
@@ -67,7 +67,7 @@ pub fn attachment_bytes(raw: &[u8], index: usize) -> Result<(String, Vec<u8>), S
     find_attachment(&parsed, index, &mut current_index)?.ok_or_else(|| "Attachment was not found".to_string())
 }
 
-fn extract_bodies(parsed: &ParsedMail<'_>) -> (String, Option<String>) {
+pub(crate) fn draft_bodies(parsed: &ParsedMail<'_>) -> (String, Option<String>) {
     let mut text = None;
     let mut html = None;
     collect_bodies(parsed, &mut text, &mut html);
@@ -95,6 +95,10 @@ fn collect_bodies(parsed: &ParsedMail<'_>, text: &mut Option<String>, html: &mut
     for part in &parsed.subparts {
         collect_bodies(part, text, html);
     }
+}
+
+pub(crate) fn draft_has_attachments(parsed: &ParsedMail<'_>) -> bool {
+    !attachment_infos(parsed).is_empty()
 }
 
 fn attachment_infos(parsed: &ParsedMail<'_>) -> Vec<AttachmentInfo> {

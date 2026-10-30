@@ -7,6 +7,18 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::models::{Account, FolderInfo, LocalDraft, MessageSummary, SecurityMode};
 
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftSyncStamp {
+    pub local_revision: String,
+    pub remote_revision: String,
+    pub remote_hash: String,
+    pub uid_validity: u32,
+    pub remote_uid: u32,
+    pub status: String,
+    pub note: String,
+}
+
 #[derive(Clone)]
 pub struct Database {
     path: PathBuf,
@@ -33,9 +45,9 @@ impl Database {
         let schema_version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        if schema_version > 5 {
+        if schema_version > 6 {
             return Err(format!(
-                "Mail cache schema version {schema_version} is newer than this Morrow build supports (4). Use a newer build to avoid corrupting your data."
+                "Mail cache schema version {schema_version} is newer than this Morrow build supports (6). Use a newer build to avoid corrupting your data."
             ));
         }
         connection
@@ -107,6 +119,19 @@ impl Database {
                 updated_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
             CREATE INDEX IF NOT EXISTS idx_local_drafts_account ON local_drafts(account_id, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS draft_sync_state (
+                account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                draft_id TEXT NOT NULL,
+                local_revision TEXT NOT NULL DEFAULT '',
+                remote_revision TEXT NOT NULL DEFAULT '',
+                remote_hash TEXT NOT NULL DEFAULT '',
+                uid_validity INTEGER NOT NULL DEFAULT 0,
+                remote_uid INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'synced',
+                note TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY(account_id, draft_id)
+            );
             CREATE TABLE IF NOT EXISTS folder_cache (
                 account_id TEXT NOT NULL PRIMARY KEY,
                 folders_json TEXT NOT NULL,
@@ -232,7 +257,7 @@ impl Database {
                 .execute("INSERT INTO message_fts(message_fts) VALUES('rebuild')", [])
                 .map_err(|e| e.to_string())?;
         }
-        connection.pragma_update(None, "user_version", 5).map_err(|e| e.to_string())?;
+        connection.pragma_update(None, "user_version", 6).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -705,6 +730,75 @@ impl Database {
             .execute("DELETE FROM local_drafts WHERE id=?1 AND account_id=?2", params![id, account_id])
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    pub fn draft_sync_stamp(&self, account_id: &str, id: &str) -> Result<Option<DraftSyncStamp>, String> {
+        let connection = self.connection()?;
+        connection.query_row(
+            "SELECT local_revision,remote_revision,remote_hash,uid_validity,remote_uid,status,note FROM draft_sync_state WHERE account_id=?1 AND draft_id=?2",
+            params![account_id, id],
+            |row| Ok(DraftSyncStamp { local_revision: row.get(0)?, remote_revision: row.get(1)?, remote_hash: row.get(2)?, uid_validity: row.get(3)?, remote_uid: row.get(4)?, status: row.get(5)?, note: row.get(6)? })
+        ).optional().map_err(|e| e.to_string())
+    }
+
+    pub fn draft_sync_stamps(&self, account_id: &str) -> Result<std::collections::HashMap<String, DraftSyncStamp>, String> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT draft_id,local_revision,remote_revision,remote_hash,uid_validity,remote_uid,status,note FROM draft_sync_state WHERE account_id=?1")
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([account_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    DraftSyncStamp {
+                        local_revision: row.get(1)?,
+                        remote_revision: row.get(2)?,
+                        remote_hash: row.get(3)?,
+                        uid_validity: row.get(4)?,
+                        remote_uid: row.get(5)?,
+                        status: row.get(6)?,
+                        note: row.get(7)?,
+                    },
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn put_draft_sync_stamp(&self, account_id: &str, id: &str, stamp: &DraftSyncStamp) -> Result<(), String> {
+        let connection = self.connection()?;
+        connection.execute("INSERT INTO draft_sync_state(account_id,draft_id,local_revision,remote_revision,remote_hash,uid_validity,remote_uid,status,note,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,unixepoch()) ON CONFLICT(account_id,draft_id) DO UPDATE SET local_revision=excluded.local_revision,remote_revision=excluded.remote_revision,remote_hash=excluded.remote_hash,uid_validity=excluded.uid_validity,remote_uid=excluded.remote_uid,status=excluded.status,note=excluded.note,updated_at=unixepoch()",
+            params![account_id, id, stamp.local_revision, stamp.remote_revision, stamp.remote_hash, stamp.uid_validity, stamp.remote_uid, stamp.status, stamp.note]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn mark_draft_sync_issue(&self, account_id: &str, id: &str, issue: &str, note: &str) -> Result<(), String> {
+        let mut stamp = self.draft_sync_stamp(account_id, id)?.unwrap_or_default();
+        stamp.status = issue.into();
+        stamp.note = note.into();
+        self.put_draft_sync_stamp(account_id, id, &stamp)
+    }
+
+    pub fn replace_unedited_draft(&self, draft: &LocalDraft, expected_revision: Option<&str>) -> Result<bool, String> {
+        // Compare-and-swap in one SQLite transaction. Never replace edits saved
+        // by another composer while a network request was in flight.
+        let mut connection = self.connection()?;
+        let tx = connection.transaction().map_err(|e| e.to_string())?;
+        let old: Option<LocalDraft> = tx.query_row("SELECT id,account_id,to_address,cc,bcc,subject,body,html_body,in_reply_to,references_header,attachments_json,updated_at FROM local_drafts WHERE id=?1 AND account_id=?2",
+            params![draft.id, draft.account_id], |row| {
+                let attachments: String = row.get(10)?;
+                Ok(LocalDraft { id: row.get(0)?, account_id: row.get(1)?, to: row.get(2)?, cc: row.get(3)?, bcc: row.get(4)?, subject: row.get(5)?, body: row.get(6)?, html_body: row.get(7)?, in_reply_to: row.get(8)?, references: row.get(9)?, attachments: serde_json::from_str(&attachments).unwrap_or_default(), updated_at: row.get(11)? })
+            }).optional().map_err(|e| e.to_string())?;
+        if old.as_ref().map(crate::smtp::draft_revision).as_deref() != expected_revision {
+            return Ok(false);
+        }
+        let changed = tx.execute("INSERT INTO local_drafts(id,account_id,to_address,cc,bcc,subject,body,html_body,in_reply_to,references_header,attachments_json,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,unixepoch()) ON CONFLICT(id) DO UPDATE SET to_address=excluded.to_address,cc=excluded.cc,bcc=excluded.bcc,subject=excluded.subject,body=excluded.body,html_body=excluded.html_body,in_reply_to=excluded.in_reply_to,references_header=excluded.references_header,attachments_json=excluded.attachments_json,updated_at=unixepoch() WHERE local_drafts.account_id=excluded.account_id",
+            params![draft.id, draft.account_id, draft.to, draft.cc, draft.bcc, draft.subject, draft.body, draft.html_body, draft.in_reply_to, draft.references, serde_json::to_string(&draft.attachments).map_err(|e| e.to_string())?]).map_err(|e| e.to_string())?;
+        if changed != 1 {
+            return Ok(false);
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(true)
     }
 
     pub fn cached_flags(&self, account_id: &str, folder: &str, uid: u32) -> Result<Vec<String>, String> {

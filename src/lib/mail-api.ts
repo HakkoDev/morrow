@@ -1,5 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, AccountInput, ConnectionTestResult, Folder, LocalDraft, MessageDetail, MessageSummary, SendMessageInput } from "./types";
+import type {
+    Account,
+    AccountInput,
+    ConnectionTestResult,
+    DraftSyncReport,
+    DraftSyncStatus,
+    Folder,
+    LocalDraft,
+    MessageDetail,
+    MessageSummary,
+    SendMessageInput,
+} from "./types";
 
 export const mailApi = {
     listAccounts: () => invoke<Account[]>("list_accounts"),
@@ -21,6 +32,14 @@ export const mailApi = {
     saveLocalDraft: (draft: LocalDraft) => invoke<void>("save_local_draft", { draft }),
     listLocalDrafts: (accountId: string) => invoke<LocalDraft[]>("list_local_drafts", { accountId }),
     deleteLocalDraft: (accountId: string, draftId: string) => invoke<void>("delete_local_draft", { accountId, draftId }),
+    syncRemoteDraft: (accountId: string, draftId: string) => invoke<void>("sync_remote_draft", { accountId, draftId }),
+    refreshRemoteDrafts: (accountId: string) => invoke<DraftSyncReport>("refresh_remote_drafts", { accountId }),
+    resolveDraftConflict: (accountId: string, draftId: string, choice: "keepLocal" | "keepServer" | "keepLocalOffline") =>
+        invoke<void>("resolve_draft_conflict", { accountId, draftId, choice }),
+    draftSyncStatuses: (accountId: string) => invoke<Record<string, DraftSyncStatus>>("draft_sync_statuses", { accountId }),
+    setDraftEditorActive: (accountId: string, draftId: string, editorToken: string, active: boolean) =>
+        invoke<void>("set_draft_editor_active", { accountId, draftId, editorToken, active }),
+    deleteRemoteDraft: (accountId: string, draftId: string) => invoke<void>("delete_remote_draft", { accountId, draftId }),
     getMessage: (accountId: string, messageId: number) => invoke<MessageDetail>("get_message", { accountId, messageId }),
     setMessageFlag: (accountId: string, folder: string, uid: number, flag: string, enabled: boolean) =>
         invoke<void>("set_message_flag", { accountId, folder, uid, flag, enabled }),

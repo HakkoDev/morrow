@@ -269,7 +269,87 @@ pub fn list_local_drafts(state: State<'_, AppState>, account_id: String) -> Resu
 
 #[tauri::command]
 pub fn delete_local_draft(state: State<'_, AppState>, account_id: String, draft_id: String) -> Result<(), String> {
-    state.db.delete_local_draft(&account_id, &draft_id)
+    // Explicit local-only deletion must not cause an immediate remote
+    // re-import on the next background scan.
+    state.db.get_account(&account_id)?;
+    state.db.delete_local_draft(&account_id, &draft_id)?;
+    state.db.mark_draft_sync_issue(
+        &account_id,
+        &draft_id,
+        "deleted-local",
+        "The local copy was removed by the user; remote copy left unchanged",
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sync_remote_draft(state: State<'_, AppState>, account_id: String, draft_id: String) -> Result<(), String> {
+    let account = state.db.get_account(&account_id)?;
+    let secret = oauth::secret(&account, true).await?;
+    tokio::time::timeout(Duration::from_secs(120), crate::draft_sync::push(&state.db, &account, &secret, &draft_id))
+        .await
+        .map_err(|_| "Draft upload timed out; local copy is intact".to_string())?
+}
+
+#[tauri::command]
+pub async fn refresh_remote_drafts(state: State<'_, AppState>, account_id: String) -> Result<crate::draft_sync::DraftSyncReport, String> {
+    let account = state.db.get_account(&account_id)?;
+    let secret = oauth::secret(&account, true).await?;
+    tokio::time::timeout(Duration::from_secs(180), crate::draft_sync::reconcile(&state.db, &account, &secret))
+        .await
+        .map_err(|_| "Draft sync timed out; local drafts were retained".to_string())?
+}
+
+#[tauri::command]
+pub async fn resolve_draft_conflict(state: State<'_, AppState>, account_id: String, draft_id: String, choice: String) -> Result<(), String> {
+    let account = state.db.get_account(&account_id)?;
+    let secret = oauth::secret(&account, true).await?;
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        crate::draft_sync::resolve(&state.db, &account, &secret, &draft_id, &choice),
+    )
+    .await
+    .map_err(|_| "Draft conflict resolution timed out. Check both local and remote copies".to_string())?
+}
+
+#[tauri::command]
+pub fn draft_sync_statuses(state: State<'_, AppState>, account_id: String) -> Result<std::collections::HashMap<String, crate::db::DraftSyncStamp>, String> {
+    state.db.get_account(&account_id)?;
+    state.db.draft_sync_stamps(&account_id)
+}
+
+#[tauri::command]
+pub async fn set_draft_editor_active(
+    state: State<'_, AppState>,
+    account_id: String,
+    draft_id: String,
+    editor_token: String,
+    active: bool,
+) -> Result<(), String> {
+    state.db.get_account(&account_id)?;
+    let _ = uuid::Uuid::parse_str(&draft_id).map_err(|_| "Invalid draft ID".to_string())?;
+    let _ = uuid::Uuid::parse_str(&editor_token).map_err(|_| "Invalid editor token".to_string())?;
+    crate::draft_sync::set_editor_active(&account_id, &draft_id, &editor_token, active).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_remote_draft(state: State<'_, AppState>, account_id: String, draft_id: String) -> Result<(), String> {
+    let account = state.db.get_account(&account_id)?;
+    let stamp = state
+        .db
+        .draft_sync_stamp(&account_id, &draft_id)?
+        .ok_or("No verified remote draft baseline; refusing deletion")?;
+    if stamp.status != "synced" || stamp.remote_hash.is_empty() {
+        return Err("Remote draft is not verified as unchanged; refusing deletion".into());
+    }
+    let password = oauth::secret(&account, true).await?;
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        imap::delete_owned_draft(&account, &password, &draft_id, &stamp.remote_hash),
+    )
+    .await
+    .map_err(|_| "Remote draft deletion timed out; inspect Drafts before retrying".to_string())?
 }
 
 #[tauri::command]

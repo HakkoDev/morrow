@@ -5,6 +5,8 @@ use async_imap::{
     Client, Session,
 };
 use futures::TryStreamExt;
+use mailparse::{parse_mail, MailHeaderMap};
+use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -14,7 +16,7 @@ use tokio_native_tls::TlsConnector;
 use crate::{
     db::Database,
     mime::cache_message,
-    models::{Account, FolderInfo, SecurityMode},
+    models::{Account, FolderInfo, LocalDraft, SecurityMode},
 };
 
 pub trait MailStream: AsyncRead + AsyncWrite + Unpin + Send + Debug {}
@@ -409,6 +411,330 @@ fn folder_rank(folder: &FolderInfo) -> u8 {
         6
     } else {
         20
+    }
+}
+
+// The sync reader intentionally handles only drafts tagged by Morrow. A
+// generic Gmail/Outlook draft cannot safely be assumed to belong to a local
+// record based on a matching subject or recipient alone.
+#[derive(Debug, Clone)]
+pub struct RemoteOwnedDraft {
+    pub id: String,
+    pub revision: String,
+    pub hash: String,
+    pub uid: u32,
+    pub uid_validity: u32,
+    pub draft: Option<LocalDraft>,
+}
+
+fn parse_owned_draft(account: &Account, id: &str, raw: &[u8]) -> Option<LocalDraft> {
+    let parsed = parse_mail(raw).ok()?;
+    // No lossy imports: regular attachments, CID images and exotic MIME must
+    // remain server-side until the editor supports round-tripping the bytes.
+    fn has_non_text_part(part: &mailparse::ParsedMail<'_>) -> bool {
+        if part.subparts.is_empty() {
+            return !matches!(part.ctype.mimetype.as_str(), "text/plain" | "text/html");
+        }
+        part.subparts.iter().any(has_non_text_part)
+    }
+    if has_non_text_part(&parsed) || crate::mime::draft_has_attachments(&parsed) {
+        return None;
+    }
+    let headers = parsed.get_headers();
+    let (body, html_body) = crate::mime::draft_bodies(&parsed);
+    Some(LocalDraft {
+        id: id.to_owned(),
+        account_id: account.id.clone(),
+        to: headers.get_first_value("To").unwrap_or_default(),
+        cc: headers.get_first_value("Cc").unwrap_or_default(),
+        bcc: headers.get_first_value("Bcc").unwrap_or_default(),
+        subject: headers.get_first_value("Subject").unwrap_or_default(),
+        body,
+        html_body,
+        in_reply_to: headers.get_first_value("In-Reply-To"),
+        references: headers.get_first_value("References"),
+        attachments: Vec::new(),
+        updated_at: 0,
+    })
+}
+
+/// A bounded complete scan, not a partial mailbox window. Missing items may
+/// only be acted on after an exhaustive read of a manageable Drafts folder.
+/// No server message is marked Seen (BODY.PEEK only).
+pub async fn list_remote_owned_drafts(account: &Account, password: &str) -> Result<Vec<RemoteOwnedDraft>, String> {
+    let mut session = connect(account, password).await?;
+    let selection = session.select(&account.drafts_folder).await.map_err(|e| e.to_string())?;
+    let uid_validity = selection
+        .uid_validity
+        .ok_or("Drafts folder did not provide UIDVALIDITY; safe synchronization disabled")?;
+    let uids = session.uid_search("ALL").await.map_err(|e| e.to_string())?;
+    if uids.len() > 500 {
+        return Err("Over 500 messages in Drafts; automatic draft reconciliation paused to avoid a partial scan".into());
+    }
+    let mut found = Vec::<(u32, String, String)>::new();
+    let mut sorted = uids.into_iter().collect::<Vec<_>>();
+    sorted.sort_unstable();
+    for batch in sorted.chunks(30) {
+        let set = batch.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let items = {
+            let stream = session.uid_fetch(&set, "(UID BODY.PEEK[HEADER])").await.map_err(|e| e.to_string())?;
+            stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?
+        };
+        for item in items {
+            let (Some(uid), Some(header)) = (item.uid, item.header()) else { continue };
+            let parsed = match parse_mail(header) {
+                Ok(parsed) => parsed,
+                Err(_) => continue,
+            };
+            let id = parsed.get_headers().get_first_value("X-Morrow-Draft-ID").unwrap_or_default();
+            let Ok(normalized) = uuid::Uuid::parse_str(id.trim()) else { continue };
+            let id = normalized.to_string();
+            if let Some(revision) = owned_draft_headers(header, &id) {
+                found.push((uid, id, revision));
+            }
+        }
+    }
+    if found.len() > 100 {
+        return Err("Over 100 Morrow-owned Drafts; refusing an unbounded download".into());
+    }
+    let mut output = Vec::new();
+    for (uid, id, revision) in found {
+        let entries = {
+            let stream = session.uid_fetch(uid.to_string(), "(UID BODY.PEEK[])").await.map_err(|e| e.to_string())?;
+            stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?
+        };
+        if entries.len() != 1 {
+            return Err("Draft changed during remote scan; will retry".into());
+        }
+        let item = &entries[0];
+        let bytes = item.body().ok_or("IMAP server did not return draft body")?;
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err("A remote Morrow draft exceeds the 8 MB sync safety cap".into());
+        }
+        if owned_draft_headers(bytes, &id).as_deref() != Some(&revision) {
+            return Err("Draft changed while being fetched; will retry".into());
+        }
+        output.push(RemoteOwnedDraft {
+            uid,
+            id: id.clone(),
+            revision,
+            hash: format!("{:x}", Sha256::digest(bytes)),
+            uid_validity,
+            draft: parse_owned_draft(account, &id, bytes),
+        });
+    }
+    let _ = session.logout().await;
+    Ok(output)
+}
+
+// Morrow only mutates copies tagged with its own unique draft UUID. IMAP
+// UIDPLUS is required because mailbox-wide EXPUNGE can delete unrelated mail.
+// APPEND is followed by a fresh SEARCH before old versions are deleted: if
+// the connection disappears after APPEND the old copy remains recoverable.
+fn owned_draft_headers(header: &[u8], id: &str) -> Option<String> {
+    let (headers, _) = mailparse::parse_headers(header).ok()?;
+    let ids = headers
+        .iter()
+        .filter(|header| header.get_key().eq_ignore_ascii_case("X-Morrow-Draft-ID"))
+        .collect::<Vec<_>>();
+    let revisions = headers
+        .iter()
+        .filter(|header| header.get_key().eq_ignore_ascii_case("X-Morrow-Draft-Revision"))
+        .collect::<Vec<_>>();
+    if ids.len() != 1 || revisions.len() != 1 || !ids[0].get_value().trim().eq_ignore_ascii_case(id) {
+        return None;
+    }
+    let revision = revisions[0].get_value();
+    let revision = revision.trim();
+    (revision.len() == 16 && revision.bytes().all(|c| c.is_ascii_hexdigit())).then(|| revision.to_ascii_lowercase())
+}
+
+fn draft_operation_guard(account_id: &str, draft_id: &str) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex, OnceLock},
+    };
+    type Locks = HashMap<(String, String), Arc<tokio::sync::Mutex<()>>>;
+    static LOCKS: OnceLock<Mutex<Locks>> = OnceLock::new();
+    let lock = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|error| error.to_string())?
+        .entry((account_id.to_owned(), draft_id.to_owned()))
+        .or_default()
+        .clone();
+    lock.try_lock_owned()
+        .map_err(|_| "A server operation for this draft is already running; retry after it finishes".into())
+}
+
+async fn find_owned_drafts(session: &mut Session<DynStream>, id: &str) -> Result<Vec<(u32, String)>, String> {
+    let uids = session
+        .uid_search(format!("HEADER X-Morrow-Draft-ID \"{id}\""))
+        .await
+        .map_err(|e| e.to_string())?;
+    if uids.len() > 50 {
+        return Err("More than 50 matching draft messages; refusing bulk modification".into());
+    }
+    if uids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let set = uids.into_iter().map(|uid| uid.to_string()).collect::<Vec<_>>().join(",");
+    let stream = session.uid_fetch(set, "(UID BODY.PEEK[HEADER])").await.map_err(|e| e.to_string())?;
+    let fetched = stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?;
+    Ok(fetched
+        .iter()
+        .filter_map(|item| {
+            let uid = item.uid?;
+            let revision = owned_draft_headers(item.header()?, id)?;
+            Some((uid, revision))
+        })
+        .collect())
+}
+
+async fn remove_owned_draft_uids(session: &mut Session<DynStream>, uids: &[u32]) -> Result<(), String> {
+    if uids.is_empty() {
+        return Ok(());
+    }
+    let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    {
+        let stream = session.uid_store(&set, "+FLAGS.SILENT (\\Deleted)").await.map_err(|e| e.to_string())?;
+        stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?;
+    }
+    {
+        let stream = session.uid_expunge(&set).await.map_err(|e| e.to_string())?;
+        stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub async fn sync_owned_draft(
+    account: &Account,
+    password: &str,
+    draft_id: &str,
+    raw: &[u8],
+    revision: &str,
+    expected_remote_hash: Option<&str>,
+) -> Result<(), String> {
+    let id = uuid::Uuid::parse_str(draft_id)
+        .map_err(|_| "Invalid Morrow draft UUID".to_string())?
+        .to_string();
+    let _guard = draft_operation_guard(&account.id, &id)?;
+    let mut session = connect(account, password).await?;
+    let caps = session.capabilities().await.map_err(|e| e.to_string())?;
+    if !caps.has_str("UIDPLUS") {
+        return Err("Safe Drafts synchronization requires IMAP UIDPLUS; the local draft is unchanged".into());
+    }
+    let selected = session
+        .select(&account.drafts_folder)
+        .await
+        .map_err(|e| format!("Select Drafts folder failed: {e}"))?;
+    let initial_validity = selected.uid_validity.ok_or("Drafts folder did not provide UIDVALIDITY")?;
+    let existing = find_owned_drafts(&mut session, &id).await?;
+    // Check the exact remote bytes, not just Morrow's original revision header:
+    // third-party editors sometimes preserve custom headers when editing text.
+    match (expected_remote_hash, existing.as_slice()) {
+        (None, []) => {}
+        (Some(expected), [only]) => {
+            let stream = session.uid_fetch(only.0.to_string(), "(UID BODY.PEEK[])").await.map_err(|e| e.to_string())?;
+            let items = stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?;
+            if items.len() != 1 || items[0].body().map(|bytes| format!("{:x}", Sha256::digest(bytes))).as_deref() != Some(expected) {
+                return Err("Draft was modified remotely. Upload cancelled to preserve both versions".into());
+            }
+        }
+        _ => return Err("Draft remote baseline changed or contains duplicate versions; refusing an unsafe overwrite".into()),
+    }
+    if !existing.iter().any(|(_, saved)| saved == revision) {
+        session
+            .append(&account.drafts_folder, Some("(\\Draft)"), None, raw)
+            .await
+            .map_err(|e| format!("Draft APPEND may have succeeded: {e}. Check the Drafts folder before retrying."))?;
+    }
+    // Re-select to obtain current UIDVALIDITY and verify the new revision.
+    let reselected = session.select(&account.drafts_folder).await.map_err(|e| e.to_string())?;
+    if reselected.uid_validity != Some(initial_validity) {
+        return Err("Drafts UIDVALIDITY changed; no old copies were removed".into());
+    }
+    let confirmed = find_owned_drafts(&mut session, &id).await?;
+    if !confirmed.iter().any(|(_, saved)| saved == revision) {
+        return Err("Could not verify the draft on the server; no older copies were deleted".into());
+    }
+    // The server may have received a simultaneous edit while APPEND ran.
+    // Refuse to expunge any unexpected revision, even when our new copy exists.
+    if confirmed
+        .iter()
+        .any(|(_, saved)| saved != revision && !existing.iter().any(|(_, old)| old == saved))
+    {
+        return Err("A different draft revision arrived during upload; both copies were preserved".into());
+    }
+    let mut kept_current = false;
+    let obsolete = confirmed
+        .into_iter()
+        .filter_map(|(uid, saved)| {
+            if saved == revision && !kept_current {
+                kept_current = true;
+                None
+            } else {
+                Some(uid)
+            }
+        })
+        .collect::<Vec<_>>();
+    if let Some(expected) = expected_remote_hash {
+        for uid in &obsolete {
+            let entries = {
+                let stream = session.uid_fetch(uid.to_string(), "(UID BODY.PEEK[])").await.map_err(|e| e.to_string())?;
+                stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?
+            };
+            if entries.len() != 1 || entries[0].body().map(|bytes| format!("{:x}", Sha256::digest(bytes))).as_deref() != Some(expected) {
+                return Err("Remote draft changed while uploading; both copies were preserved".into());
+            }
+        }
+    }
+    remove_owned_draft_uids(&mut session, &obsolete).await?;
+    let _ = tokio::time::timeout(Duration::from_secs(5), session.logout()).await;
+    Ok(())
+}
+
+pub async fn delete_owned_draft(account: &Account, password: &str, draft_id: &str, expected_hash: &str) -> Result<(), String> {
+    let id = uuid::Uuid::parse_str(draft_id)
+        .map_err(|_| "Invalid Morrow draft UUID".to_string())?
+        .to_string();
+    let _guard = draft_operation_guard(&account.id, &id)?;
+    let mut session = connect(account, password).await?;
+    let caps = session.capabilities().await.map_err(|e| e.to_string())?;
+    if !caps.has_str("UIDPLUS") {
+        return Err("Safe Drafts deletion requires IMAP UIDPLUS".into());
+    }
+    let selected = session.select(&account.drafts_folder).await.map_err(|e| e.to_string())?;
+    if selected.uid_validity.is_none() {
+        return Err("Drafts server did not provide UIDVALIDITY; no messages were deleted".into());
+    }
+    let copies = find_owned_drafts(&mut session, &id).await?;
+    if copies.len() != 1 {
+        return Err("Remote draft has changed or duplicates; cleanup left to user".into());
+    }
+    let uid = copies[0].0;
+    let fetched = {
+        let stream = session.uid_fetch(uid.to_string(), "(UID BODY.PEEK[])").await.map_err(|e| e.to_string())?;
+        stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?
+    };
+    if fetched.len() != 1 || fetched[0].body().map(|bytes| format!("{:x}", Sha256::digest(bytes))).as_deref() != Some(expected_hash) {
+        return Err("Server draft was edited since last sync; refusing deletion".into());
+    }
+    remove_owned_draft_uids(&mut session, &[uid]).await?;
+    let _ = session.logout().await;
+    Ok(())
+}
+
+#[cfg(test)]
+mod owned_draft_tests {
+    use super::owned_draft_headers;
+    #[test]
+    fn draft_headers_require_exact_ownership_and_revision() {
+        let id = "7cb7f94a-6933-4e11-a8d5-bd83293257f7";
+        let h = format!("From: a@b.test\r\nX-Morrow-Draft-ID: {id}\r\nX-Morrow-Draft-Revision: 1234567890abcdef\r\n\r\n");
+        assert_eq!(owned_draft_headers(h.as_bytes(), id).as_deref(), Some("1234567890abcdef"));
+        assert_eq!(owned_draft_headers(h.as_bytes(), "different"), None);
+        assert_eq!(owned_draft_headers(b"X-Morrow-Draft-ID: x\r\n", "x"), None);
     }
 }
 

@@ -94,3 +94,20 @@ export interface LocalDraft {
     attachments: string[];
     updatedAt: number;
 }
+
+export interface DraftSyncStatus {
+    localRevision: string;
+    remoteRevision: string;
+    remoteHash: string;
+    uidValidity: number;
+    remoteUid: number;
+    status: string;
+    note: string;
+}
+
+export interface DraftSyncReport {
+    uploaded: number;
+    downloaded: number;
+    conflicts: number;
+    skipped: number;
+}

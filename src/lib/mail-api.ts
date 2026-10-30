@@ -5,6 +5,7 @@ import type {
     ConnectionTestResult,
     DraftSyncReport,
     DraftSyncStatus,
+    ExternalDraftSummary,
     Folder,
     LocalDraft,
     MessageDetail,
@@ -34,6 +35,8 @@ export const mailApi = {
     deleteLocalDraft: (accountId: string, draftId: string) => invoke<void>("delete_local_draft", { accountId, draftId }),
     syncRemoteDraft: (accountId: string, draftId: string) => invoke<void>("sync_remote_draft", { accountId, draftId }),
     refreshRemoteDrafts: (accountId: string) => invoke<DraftSyncReport>("refresh_remote_drafts", { accountId }),
+    listExternalDrafts: (accountId: string) => invoke<ExternalDraftSummary[]>("list_external_drafts", { accountId }),
+    importExternalDraft: (accountId: string, uid: number, uidValidity: number) => invoke<LocalDraft>("import_external_draft", { accountId, uid, uidValidity }),
     resolveDraftConflict: (accountId: string, draftId: string, choice: "keepLocal" | "keepServer" | "keepLocalOffline") =>
         invoke<void>("resolve_draft_conflict", { accountId, draftId, choice }),
     draftSyncStatuses: (accountId: string) => invoke<Record<string, DraftSyncStatus>>("draft_sync_statuses", { accountId }),

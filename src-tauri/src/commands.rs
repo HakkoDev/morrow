@@ -301,6 +301,25 @@ pub async fn refresh_remote_drafts(state: State<'_, AppState>, account_id: Strin
 }
 
 #[tauri::command]
+pub async fn list_external_drafts(state: State<'_, AppState>, account_id: String) -> Result<Vec<imap::ExternalDraftSummary>, String> {
+    let account = state.db.get_account(&account_id)?;
+    let secret = oauth::secret(&account, true).await?;
+    tokio::time::timeout(Duration::from_secs(110), imap::list_external_drafts(&account, &secret))
+        .await
+        .map_err(|_| "External draft listing timed out".to_string())?
+}
+
+#[tauri::command]
+pub async fn import_external_draft(state: State<'_, AppState>, account_id: String, uid: u32, uid_validity: u32) -> Result<LocalDraft, String> {
+    let account = state.db.get_account(&account_id)?;
+    let secret = oauth::secret(&account, true).await?;
+    let raw = tokio::time::timeout(Duration::from_secs(110), imap::fetch_external_draft(&account, &secret, uid, uid_validity))
+        .await
+        .map_err(|_| "External draft import timed out. Original is unchanged".to_string())??;
+    crate::draft_import::import_copy(&state.db, &account, &raw)
+}
+
+#[tauri::command]
 pub async fn resolve_draft_conflict(state: State<'_, AppState>, account_id: String, draft_id: String, choice: String) -> Result<(), String> {
     let account = state.db.get_account(&account_id)?;
     let secret = oauth::secret(&account, true).await?;

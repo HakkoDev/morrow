@@ -414,6 +414,90 @@ fn folder_rank(folder: &FolderInfo) -> u8 {
     }
 }
 
+/// A read-only description of a Drafts-folder message that Morrow does not
+/// own. Imported copies get a new UUID; this UID is never used for deletion.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalDraftSummary {
+    pub uid: u32,
+    pub uid_validity: u32,
+    pub subject: String,
+    pub to: String,
+    pub from: String,
+}
+
+pub async fn list_external_drafts(account: &Account, password: &str) -> Result<Vec<ExternalDraftSummary>, String> {
+    let mut session = connect(account, password).await?;
+    let selected = session.select(&account.drafts_folder).await.map_err(|e| e.to_string())?;
+    let uid_validity = selected.uid_validity.ok_or("Drafts does not expose UIDVALIDITY")?;
+    let uids = session.uid_search("ALL").await.map_err(|e| e.to_string())?;
+    if uids.len() > 500 {
+        return Err("Drafts contains more than 500 messages; manual import is paused to avoid incomplete results".into());
+    }
+    let mut sorted = uids.into_iter().collect::<Vec<_>>();
+    sorted.sort_unstable_by(|a, b| b.cmp(a));
+    let mut output = Vec::new();
+    for batch in sorted.chunks(30) {
+        let set = batch.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let items = {
+            let stream = session.uid_fetch(&set, "(UID BODY.PEEK[HEADER])").await.map_err(|e| e.to_string())?;
+            stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?
+        };
+        for item in items {
+            let (Some(uid), Some(header)) = (item.uid, item.header()) else { continue };
+            let Ok(parsed) = parse_mail(header) else { continue };
+            let headers = parsed.get_headers();
+            // Even malformed Morrow headers make this ineligible for external
+            // import. They must be resolved in the owned-draft workflow.
+            if headers.get_first_value("X-Morrow-Draft-ID").is_some() {
+                continue;
+            }
+            output.push(ExternalDraftSummary {
+                uid,
+                uid_validity,
+                subject: headers.get_first_value("Subject").unwrap_or_default(),
+                to: headers.get_first_value("To").unwrap_or_default(),
+                from: headers.get_first_value("From").unwrap_or_default(),
+            });
+        }
+    }
+    output.sort_unstable_by_key(|item| std::cmp::Reverse(item.uid));
+    let _ = session.logout().await;
+    Ok(output)
+}
+
+/// Fetch an external server draft for an explicit copy operation only.
+/// UIDVALIDITY is required to prevent a stale UI selection resolving to a
+/// completely different message after mailbox recreation.
+pub async fn fetch_external_draft(account: &Account, password: &str, uid: u32, expected_uid_validity: u32) -> Result<Vec<u8>, String> {
+    if uid == 0 || expected_uid_validity == 0 {
+        return Err("Invalid IMAP draft identifier".into());
+    }
+    let mut session = connect(account, password).await?;
+    let selected = session.select(&account.drafts_folder).await.map_err(|e| e.to_string())?;
+    if selected.uid_validity != Some(expected_uid_validity) {
+        return Err("Drafts mailbox UIDVALIDITY changed. Refresh the list before importing".into());
+    }
+    let items = {
+        let stream = session.uid_fetch(uid.to_string(), "(UID BODY.PEEK[])").await.map_err(|e| e.to_string())?;
+        stream.try_collect::<Vec<_>>().await.map_err(|e| e.to_string())?
+    };
+    if items.len() != 1 || items[0].uid != Some(uid) {
+        return Err("Selected server draft no longer exists".into());
+    }
+    let bytes = items[0].body().ok_or("The server returned no draft body")?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err("Draft exceeds 8 MB import limit. Original remains on server".into());
+    }
+    let parsed = parse_mail(bytes).map_err(|e| e.to_string())?;
+    if parsed.get_headers().get_first_value("X-Morrow-Draft-ID").is_some() {
+        return Err("This server draft is Morrow-owned and must use the normal draft sync workflow".into());
+    }
+    let saved = bytes.to_vec();
+    let _ = session.logout().await;
+    Ok(saved)
+}
+
 // The sync reader intentionally handles only drafts tagged by Morrow. A
 // generic Gmail/Outlook draft cannot safely be assumed to belong to a local
 // record based on a matching subject or recipient alone.

@@ -33,6 +33,18 @@ impl Database {
         Ok(db)
     }
 
+    pub fn draft_assets_dir(&self, account_id: &str, draft_id: &str) -> Result<PathBuf, String> {
+        let account = uuid::Uuid::parse_str(account_id).map_err(|_| "Invalid account UUID".to_string())?;
+        let draft = uuid::Uuid::parse_str(draft_id).map_err(|_| "Invalid draft UUID".to_string())?;
+        Ok(self
+            .path
+            .parent()
+            .ok_or("Missing application data folder")?
+            .join("draft-assets")
+            .join(account.to_string())
+            .join(draft.to_string()))
+    }
+
     fn connection(&self) -> Result<Connection, String> {
         let connection = Connection::open(&self.path).map_err(|e| e.to_string())?;
         connection.pragma_update(None, "foreign_keys", "ON").map_err(|e| e.to_string())?;

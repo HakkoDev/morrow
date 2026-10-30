@@ -111,3 +111,12 @@ export interface DraftSyncReport {
     conflicts: number;
     skipped: number;
 }
+
+// Foreign IMAP Drafts are read-only until the user explicitly imports a copy.
+export interface ExternalDraftSummary {
+    uid: number;
+    uidValidity: number;
+    subject: string;
+    to: string;
+    from: string;
+}

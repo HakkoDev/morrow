@@ -1,6 +1,7 @@
 mod commands;
 mod credentials;
 mod db;
+mod draft_import;
 mod draft_sync;
 mod imap;
 mod mime;
@@ -241,6 +242,8 @@ pub fn run() {
             commands::delete_local_draft,
             commands::sync_remote_draft,
             commands::refresh_remote_drafts,
+            commands::list_external_drafts,
+            commands::import_external_draft,
             commands::resolve_draft_conflict,
             commands::draft_sync_statuses,
             commands::set_draft_editor_active,
@@ -302,7 +305,7 @@ pub(crate) fn update_unread_indicators(db: &Database, app: &tauri::AppHandle) {
     let Ok(counts) = db.unread_counts() else { return };
     let count: usize = counts.values().sum();
     if let Some(tray) = app.tray_by_id("morrow-tray") {
-        let _ = tray.set_tooltip(Some(format!("Morrow Â· {count} unread")));
+        let _ = tray.set_tooltip(Some(format!("Morrow · {count} unread")));
     }
     if let Some(window) = app.get_webview_window("main") {
         #[cfg(target_os = "windows")]

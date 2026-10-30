@@ -1,7 +1,12 @@
-name: Verify and build Morrow (Windows)
+name: Verify Morrow (Windows)
 
 on:
   workflow_dispatch:
+    inputs:
+      build_installer:
+        description: Build and upload an unsigned development installer
+        type: boolean
+        default: false
   pull_request:
   push:
     branches: [main, master]
@@ -10,7 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  verify-and-package:
+  verify:
     runs-on: windows-latest
     timeout-minutes: 50
     steps:
@@ -64,18 +69,20 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
       - name: Check Rust compilation
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked
 
       - name: Run Rust unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
       - name: Run Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Build Windows NSIS installer
+        if: github.event_name == 'workflow_dispatch' && inputs.build_installer
         run: bun run tauri:build:windows
 
       - name: Confirm installer produced
+        if: github.event_name == 'workflow_dispatch' && inputs.build_installer
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem 'src-tauri/target/release/bundle/nsis/*-setup.exe')
@@ -83,6 +90,7 @@ jobs:
           $installers | ForEach-Object { Write-Host "Installer: $($_.FullName), bytes: $($_.Length)" }
 
       - name: Upload Windows installer
+        if: github.event_name == 'workflow_dispatch' && inputs.build_installer
         uses: actions/upload-artifact@v7
         with:
           name: morrow-dev-windows-nsis-no-updates

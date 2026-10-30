@@ -93,9 +93,39 @@ test("release builds run concurrently and manifest uploads last", () => {
     assert.match(workflow, /merge-multiple: true/);
     assert.match(workflow, /Upload installers and signatures before manifest/);
     assert.match(workflow, /Upload latest\.json last/);
-    assert.doesNotMatch(workflow, /cargo clippy|cargo test/);
     assert.match(workflow, /bun run biome:check/);
     assert.match(workflow, /bun run typecheck/);
     assert.match(source("src-tauri/Cargo.toml"), /lto = "thin"\ncodegen-units = 8/);
     assert.match(source(".github/workflows/build-windows.yml"), /shared-key: morrow-windows/);
+});
+
+test("push and PR verification package installers only on explicit manual request", () => {
+    const workflow = source(".github/workflows/build-windows.yml");
+    assert.match(workflow, /pull_request:/);
+    assert.match(workflow, /branches: \[main, master\]/);
+    assert.match(workflow, /build_installer:\s*description: [^\n]+\s*type: boolean\s*default: false/);
+    for (const name of ["Build Windows NSIS installer", "Confirm installer produced", "Upload Windows installer"]) {
+        const step = workflow.split(`- name: ${name}\n`)[1]?.split(/\n\s*- (?:name:|uses:)/)[0];
+        assert.ok(step, `Missing packaging step: ${name}`);
+        assert.match(step, /if: github\.event_name == 'workflow_dispatch' && inputs\.build_installer/);
+    }
+    for (const command of ["bun run test:source", "bun run build", "cargo check", "cargo test", "cargo clippy"]) {
+        assert.ok(workflow.includes(command), `Verification must retain ${command}`);
+    }
+});
+
+test("release platforms validate the tagged native source before signed packaging", () => {
+    const workflow = source(".github/workflows/release.yml");
+    const build = workflow.split("\n  build:\n")[1]?.split("\n  finalize:\n")[0];
+    assert.ok(build);
+    assert.match(build, /components: rustfmt, clippy/);
+    const validation = build.indexOf("- name: Validate tagged native source before packaging");
+    const packaging = build.indexOf("- name: Build signed packages");
+    assert.ok(validation >= 0 && packaging > validation);
+    const checks = build.slice(validation, build.indexOf("- name: Generate signed release configuration", validation));
+    assert.doesNotMatch(checks, /if:|continue-on-error:/);
+    assert.match(checks, /cargo fmt --manifest-path src-tauri\/Cargo\.toml --all -- --check/);
+    assert.match(checks, /cargo check --manifest-path src-tauri\/Cargo\.toml --locked/);
+    assert.match(checks, /cargo test --manifest-path src-tauri\/Cargo\.toml --locked/);
+    assert.match(checks, /cargo clippy --manifest-path src-tauri\/Cargo\.toml --all-targets --locked -- -D warnings/);
 });

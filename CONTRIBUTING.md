@@ -50,15 +50,23 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 See [docs/appearance.md](docs/appearance.md) for the theme token system and local preferences. Keep new UI colors on semantic shadcn tokens and ensure native compose windows receive setting changes.
 
+## Continuous verification and development installers
+
+`Verify Morrow (Windows)` runs frontend checks, compilation, Rust tests and
+Clippy on pull requests and pushes to `main`/`master`, without packaging an installer.
+To produce an unsigned development installer, run the workflow manually and
+enable **build_installer**. Manual runs default to checks only. Development
+installers are uploaded as workflow artifacts, not published as signed updates.
+
 ## Tagged releases
 
 The release workflow builds Windows NSIS and Linux AppImage/DEB packages in parallel.
 The final job waits for both, then uploads the signed installers and a single
 `latest.json` manifest. Do not publish the draft if verification fails.
 
-Rust tests, Clippy and the Windows installer run in the `Verify and build Morrow`
-workflow on `main`. Require that workflow to pass before tagging a release;
-tagged release builds intentionally avoid repeating those expensive checks.
+Each tagged release validates its own source, then runs Rust formatting,
+compilation, tests and strict Clippy on both target platforms before signed
+packaging. It does not rely on a separate branch workflow having passed.
 The release profile uses Thin LTO with eight codegen units to reduce compilation time.
 
 Inspect the timings for **Build signed packages**, **Linux native dependencies**,

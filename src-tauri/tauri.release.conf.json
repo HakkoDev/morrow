@@ -1,0 +1,10 @@
+{
+    "bundle": { "createUpdaterArtifacts": true },
+    "plugins": {
+        "updater": {
+            "pubkey": "",
+            "endpoints": [],
+            "windows": { "installMode": "passive" }
+        }
+    }
+}

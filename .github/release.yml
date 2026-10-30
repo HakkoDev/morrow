@@ -1,0 +1,21 @@
+# Used by GitHub's native Generate release notes feature for PR-based releases.
+# The Morrow tag workflow additionally generates notes from Conventional Commits,
+# so directly committed changes aren't silently left out.
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      - internal
+  categories:
+    - title: Breaking changes
+      labels: [breaking-change]
+    - title: New features
+      labels: [feature, enhancement]
+    - title: Bug fixes
+      labels: [bug, fix]
+    - title: Security
+      labels: [security]
+    - title: Maintenance and dependencies
+      labels: [dependencies, maintenance]
+    - title: Other changes
+      labels: ['*']

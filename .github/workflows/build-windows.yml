@@ -1,46 +1,79 @@
-name: Build Windows installer
+name: Verify and build Morrow (Windows)
 
 on:
   workflow_dispatch:
+  pull_request:
   push:
-    tags:
-      - "v*"
+    branches: [main, master]
 
 permissions:
   contents: read
 
 jobs:
-  windows-nsis:
+  verify-and-package:
     runs-on: windows-latest
+    timeout-minutes: 50
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Checkout project
+        uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
+          bun-version: latest
 
-      - name: Set up Rust
+      - name: Install Rust MSVC toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
 
-      - name: Cache Rust build
+      - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
 
-      - name: Install frontend dependencies
-        run: npm install
+      - name: Install frontend dependencies from lockfile
+        run: bun install
+
+      - name: Check source regressions
+        run: bun run test:source
+
+      - name: Biome formatting, lint and import checks
+        run: bun run biome:check
 
       - name: Typecheck frontend
-        run: npm run typecheck
+        run: bun run typecheck
 
-      - name: Build Morrow NSIS installer
-        run: npm run tauri:build:windows
+      - name: Build frontend
+        run: bun run build
 
-      - name: Upload installer
-        uses: actions/upload-artifact@v6
+      - name: Verify Rust formatting (read-only)
+        run: bun run format:rust:check
+
+      - name: Check Rust compilation
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Run Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Build Windows NSIS installer
+        run: bun run tauri:build:windows
+
+      - name: Confirm installer produced
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem 'src-tauri/target/release/bundle/nsis/*-setup.exe')
+          if ($installers.Count -eq 0) { throw 'No NSIS installer produced' }
+          $installers | ForEach-Object { Write-Host "Installer: $($_.FullName), bytes: $($_.Length)" }
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
         with:
-          name: morrow-windows-installer
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          name: morrow-dev-windows-nsis-no-updates
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
+          retention-days: 14

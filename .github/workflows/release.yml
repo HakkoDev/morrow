@@ -1,0 +1,166 @@
+name: Release Morrow (Windows + Linux)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: morrow-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Create release draft and notes
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate tag / app versions and create notes
+        id: version
+        shell: bash
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          test "$GITHUB_REF_TYPE" = tag || { echo 'Release requires a version tag.'; exit 1; }
+          node scripts/verify-versions.mjs
+          node scripts/generate-release-notes.mjs --output release-notes.md
+          echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+      - name: Validate signing credentials are configured
+        env:
+          TAURI_SIGNING_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo 'Missing TAURI_SIGNING_PRIVATE_KEY secret.'; exit 1; }
+          test -n "$TAURI_SIGNING_PUBLIC_KEY" || { echo 'Missing TAURI_SIGNING_PUBLIC_KEY variable.'; exit 1; }
+          node scripts/prepare-release.mjs
+      - name: Create draft release (once; no matrix races)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release for $TAG already exists; leaving its notes intact."
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Morrow $TAG" --draft --notes-file release-notes.md
+          fi
+
+  build:
+    name: ${{ matrix.label }}
+    needs: prepare
+    # Parallel upload of latest.json is unsafe (delete/re-upload race).
+    # These two jobs are intentionally serialized so the second merges the first's platform.
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - label: Linux x64 AppImage + DEB
+            platform: ubuntu-22.04
+            bundles: 'appimage,deb'
+          - label: Windows x64 NSIS
+            platform: windows-latest
+            bundles: 'nsis'
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev pkg-config libsecret-1-dev libgtk-3-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - name: Install frontend dependencies
+        run: bun install
+      - name: Validate source, frontend and release settings
+        shell: bash
+        env:
+          TAURI_SIGNING_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          bun run test:source
+          bun run biome:check
+          bun run typecheck
+          node scripts/verify-versions.mjs
+          node scripts/prepare-release.mjs
+      - name: Rust formatting and lint checks
+        shell: bash
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
+      - name: Rust compilation and tests
+        shell: bash
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build and upload release binaries and updater metadata
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: '--bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json'
+
+  validate:
+    name: Verify release assets and updater manifest
+    needs: [prepare, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Download release metadata and validate both platforms
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          mkdir -p release-verify
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'latest.json' --dir release-verify
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name' > release-verify/assets.txt
+          node scripts/verify-release-assets.mjs release-verify/latest.json release-verify/assets.txt
+          echo 'Both platforms found. Review the draft and publish it in GitHub Releases.'

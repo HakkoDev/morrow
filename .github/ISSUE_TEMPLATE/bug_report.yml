@@ -1,0 +1,63 @@
+name: Bug report
+description: Report a reproducible problem in the application
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues first. **Do not report vulnerabilities here.** Use the Security tab for private disclosure. Remove credentials, personal data and private repository or email content from attachments.
+  - type: input
+    id: version
+    attributes:
+      label: Application version
+      description: Include the installed version, not just the branch name.
+      placeholder: e.g. 0.4.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. ...
+2. ...
+3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots (redacted)
+      description: Remove secrets, account identifiers, personal information, and private content.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched for existing issues and removed private information.
+          required: true
